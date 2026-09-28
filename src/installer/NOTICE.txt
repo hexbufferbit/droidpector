@@ -1,0 +1,24 @@
+droidpector
+================
+
+droidpector runs Android apps in an isolated virtual machine on this
+computer and shows the network traffic of that virtual machine only.
+
+Third-party components installed with droidpector:
+
+* QEMU - machine emulator and virtualizer. GNU General Public License v2
+  (see QEMU-COPYING.txt). Unmodified upstream Windows build.
+* BlissOS 16 (Android 13, x86_64) - Android Open Source Project components
+  under the Apache License 2.0, the Linux kernel under GPL-2.0, and other
+  components under their respective licenses. Included unmodified (the
+  system image is only re-compressed to fit the installer). The image
+  includes the ARM-to-x86 translation library shipped by the BlissOS project.
+* Microsoft Edge WebView2 Runtime - installed from Microsoft if missing, under
+  Microsoft's license terms.
+* Open-source Go and JavaScript libraries compiled into the application
+  (BSD, MIT, Apache-2.0, ISC licenses).
+
+Where to obtain the corresponding source code is listed in SOURCES.txt.
+
+By continuing you confirm that you will use droidpector only to analyse
+applications you are authorized to analyse.

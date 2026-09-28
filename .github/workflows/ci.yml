@@ -1,0 +1,152 @@
+name: ci
+
+# Every commit: Build → Unit tests → Integration tests → Static analysis →
+# Package (windows-x64) → E2E. A failing stage blocks all later stages, so a
+# production installer is only produced from a fully green pipeline.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.x"
+  NODE_VERSION: "22"
+
+jobs:
+  build-test:
+    name: build + unit + integration (${{ matrix.os }})
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: src/ui/web/package-lock.json }
+      - name: Build UI
+        working-directory: src/ui/web
+        run: npm ci && npm run build
+      - name: Build
+        run: go build ./...
+      - name: Unit + integration tests (race)
+        run: go test -race -count=1 ./...
+      - name: UI unit tests
+        working-directory: src/ui/web
+        run: npm test
+
+  static-analysis:
+    needs: build-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: src/ui/web/package-lock.json }
+      - run: cd src/ui/web && npm ci
+      - name: gofmt / vet / staticcheck / govulncheck / UI lint
+        run: |
+          make lint
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Fuzz parsers (smoke)
+        run: |
+          for f in FuzzParseClientHello FuzzParseDHCP FuzzWSParser; do go test -run='^$' -fuzz="^$f\$" -fuzztime=30s ./src/network/; done
+          go test -run='^$' -fuzz='^FuzzCompile$' -fuzztime=30s ./src/query/
+
+  runtime:
+    name: prepare runtime bundle
+    needs: build-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - uses: actions/cache@v4
+        with: { path: .cache/downloads, key: runtime-downloads-${{ hashFiles('tools/runtime/prepare.sh') }} }
+      - run: sudo apt-get update && sudo apt-get install -y p7zip-full qemu-utils e2fsprogs erofs-utils squashfs-tools xorriso
+      - run: make runtime
+      - uses: actions/upload-artifact@v4
+        with: { name: runtime, path: build/runtime, retention-days: 7 }
+
+  vm-integration:
+    name: VM integration (KVM, real Android)
+    needs: runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/download-artifact@v4
+        with: { name: runtime, path: build/runtime }
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          sudo apt-get update && sudo apt-get install -y qemu-system-x86
+      - name: Real-VM integration tests
+        run: make test-vm
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: vm-logs, path: /tmp/**/logs/*.log, if-no-files-found: ignore }
+
+  package:
+    name: package windows-x64
+    needs: [static-analysis, runtime, vm-integration]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: src/ui/web/package-lock.json }
+      - uses: actions/download-artifact@v4
+        with: { name: runtime, path: build/runtime }
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+      - name: Build UI + Release exe + installer
+        shell: bash
+        run: |
+          make ui
+          make installer MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
+          make windows-debug
+      - name: Smoke-test the installer (silent install / run / uninstall)
+        shell: pwsh
+        run: ./tests/e2e/windows-smoke.ps1 -Installer build/droidpector-Setup-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            build/droidpector.exe
+            build/droidpector-Setup-x64.exe
+            build/debug/droidpector.exe
+
+  e2e:
+    name: E2E (UI + real capture)
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache: true }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: src/ui/web/package-lock.json }
+      - run: cd src/ui/web && npm ci && npx playwright install --with-deps chromium
+      - run: make e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: playwright-report, path: src/ui/web/playwright-report }
