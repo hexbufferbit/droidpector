@@ -40,6 +40,7 @@ import (
 const (
 	apiHost  = "api.example.test"
 	httpHost = "plain.example.test"
+	rawHost  = "raw.example.test" // line-echo server: exercises the raw TCP path
 )
 
 func main() {
@@ -69,9 +70,15 @@ func run(port int, dataDir string) error {
 	if err := os.WriteFile(caFile, srv.CAPEM, 0o600); err != nil {
 		return err
 	}
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	defer rawLn.Close()
+	go serveRawEcho(rawLn)
 	paths := platform.NewPaths(dataDir, filepath.Join(dataDir, "no-runtime"), dataDir)
 	cfg := platform.DefaultConfig()
-	cfg.HostMappings = []string{apiHost + "=" + srv.HTTPSAddr, httpHost + "=" + srv.HTTPAddr}
+	cfg.HostMappings = []string{apiHost + "=" + srv.HTTPSAddr, httpHost + "=" + srv.HTTPAddr, rawHost + "=" + rawLn.Addr().String()}
 	cfg.ExtraRootsPEM = caFile
 	logs, err := platform.OpenLoggers(paths.LogDir, platform.LevelTrace, false)
 	if err != nil {
@@ -195,6 +202,7 @@ func (g *generator) run(kind string) (int, error) {
 		},
 		"ws":     g.websocket,
 		"pinned": g.pinnedCall,
+		"tcp":    g.rawTCP,
 	}
 	order := []string{"get", "post", "json", "image", "error", "401", "html", "http", "ws"}
 	if kind == "" || kind == "all" {
@@ -259,6 +267,56 @@ func (g *generator) websocket() error {
 		read()
 	}
 	time.Sleep(100 * time.Millisecond)
+	return nil
+}
+
+// serveRawEcho answers each line with "ECHO <line>" (a non-HTTP protocol).
+func serveRawEcho(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer c.Close()
+			io.WriteString(c, "RAW-READY\n")
+			r := bufio.NewReader(c)
+			for {
+				line, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				io.WriteString(c, "ECHO "+line)
+			}
+		}()
+	}
+}
+
+// rawTCP opens a raw (non-HTTP) connection from the guest and exchanges a
+// few lines, like a custom-protocol app would.
+func (g *generator) rawTCP() error {
+	ctx := context.Background()
+	ips, err := g.guest.Resolver().LookupNetIP(ctx, "ip4", rawHost)
+	if err != nil {
+		return err
+	}
+	c, err := g.guest.DialTCP(ctx, netip.AddrPortFrom(ips[0], 7777))
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	r := bufio.NewReader(c)
+	if _, err := r.ReadString('\n'); err != nil {
+		return err
+	}
+	for _, m := range []string{"hello raw\n", "{\"op\":\"ping\"}\n"} {
+		if _, err := io.WriteString(c, m); err != nil {
+			return err
+		}
+		if _, err := r.ReadString('\n'); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

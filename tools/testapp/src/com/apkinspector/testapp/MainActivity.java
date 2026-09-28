@@ -56,6 +56,15 @@ public class MainActivity extends Activity {
         root.addView(status);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
+        // Every touch is logged with its logical coordinates so tests can
+        // verify how host pointer input maps into the rotated display.
+        scroll.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent ev) {
+                android.util.Log.i("droidpector-touch", "action=" + ev.getActionMasked() + " x=" + (int) ev.getRawX() + " y=" + (int) ev.getRawY());
+                return false;
+            }
+        });
         setContentView(scroll);
 
         String action = getIntent().getStringExtra("action");

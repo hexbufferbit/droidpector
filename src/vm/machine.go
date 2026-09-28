@@ -144,17 +144,6 @@ func Start(ctx context.Context, p Profile, opts Options, deps Deps) (*Machine, e
 
 func listenLocal() (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") }
 
-func freeLocalPort(min int) (int, error) {
-	for p := min; p < min+100; p++ {
-		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
-		if err == nil {
-			l.Close()
-			return p, nil
-		}
-	}
-	return 0, fmt.Errorf("no free local port for the display")
-}
-
 func randomPassword() string {
 	b := make([]byte, 6)
 	rand.Read(b)
@@ -187,10 +176,7 @@ func launch(ctx context.Context, p Profile, accel string, opts Options, deps Dep
 	if err != nil {
 		return nil, err
 	}
-	vncPort, err := freeLocalPort(5910)
-	if err != nil {
-		return nil, err
-	}
+	vncPort := 5910 // lower bound; QEMU chooses the first free display (see BuildArgs)
 	args, err := BuildArgs(LaunchSpec{
 		Profile: p, Accel: accel, MemoryMB: opts.MemoryMB, CPUs: opts.CPUs, DataDisk: opts.DataDisk,
 		QMPAddr: qmpL.Addr().String(), SerialAddr: serL.Addr().String(), NetAddr: netL.Addr().String(),
@@ -274,6 +260,14 @@ func launch(ctx context.Context, p Profile, accel string, opts Options, deps Dep
 	if err := q.Execute(qctx, "set_password", map[string]any{"protocol": "vnc", "password": m.vncPass}, nil); err != nil {
 		return fail(&StartError{Code: CodeQEMUFailed, Title: "Android sandbox could not start: securing the display failed.", Details: err.Error()})
 	}
+	var vnc struct {
+		Host    string `json:"host"`
+		Service string `json:"service"`
+	}
+	if err := q.Execute(qctx, "query-vnc", nil, &vnc); err != nil || vnc.Service == "" {
+		return fail(&StartError{Code: CodeQEMUFailed, Title: "Android sandbox could not start: the display server did not start.", Details: fmt.Sprintf("%v %+v", err, vnc)})
+	}
+	m.vncAddr = net.JoinHostPort("127.0.0.1", vnc.Service)
 	m.console = NewConsole(conns[1])
 	go func() {
 		if err := deps.AttachNet(mctx, conns[2]); err != nil {

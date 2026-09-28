@@ -1,17 +1,19 @@
-// Window chrome: header status pill, toolbar, banners.
+// Window chrome: header status pill, app-only shield chip, toolbar, banners.
 import { useState } from 'react';
 import { links } from '../../api/client';
+import { ContextMenu, type MenuItem } from '../../components/ContextMenu';
 import { Icon } from '../../components/Icon';
+import { pluralize } from '../../lib/format';
 import { actions, appStore, BUSY_STATES, RUNNING_STATES } from '../../state/app';
 import { useStore } from '../../state/store';
 import { pickApk } from '../apk/files';
-import { statusLabel, statusTone } from './status';
-import { ContextMenu, type MenuItem } from '../../components/ContextMenu';
 import { downloadHref } from '../network/rowActions';
+import { statusLabel, statusTone } from './status';
 
 export function StatusPill() {
   const status = useStore(appStore, (s) => s.status);
-  const tone = statusTone(status);
+  const connection = useStore(appStore, (s) => s.connection);
+  const tone = connection !== 'open' && status ? 'idle' : statusTone(status);
   const title = status
     ? [status.runtime && `Runtime: ${status.runtime}`, status.android && `Android ${status.android}`, status.accelerator && `Acceleration: ${status.accelerator}`]
         .filter(Boolean)
@@ -20,8 +22,22 @@ export function StatusPill() {
   return (
     <div className={`status-pill tone-${tone}`} role="status" aria-live="polite" title={title || undefined} data-state={status?.state ?? 'unknown'}>
       <span className="status-dot" aria-hidden="true" />
-      <span>{statusLabel(status)}</span>
+      <span className="status-text">{statusLabel(status)}</span>
     </div>
+  );
+}
+
+/** AppOnlyChip shows that the sandbox firewall only lets the app under test reach the network. */
+export function AppOnlyChip() {
+  const on = useStore(appStore, (s) => s.status?.appOnlyTraffic ?? false);
+  const blocked = useStore(appStore, (s) => s.status?.blockedFlows ?? 0);
+  if (!on) return null;
+  const title = `Only the app under test may reach the network; Android system traffic is blocked${blocked ? ` · ${pluralize('blocked flow', blocked)}` : ''}`;
+  return (
+    <span className="chip shield" title={title} data-testid="app-only-chip">
+      <Icon name="shieldCheck" size={12} /> App-only
+      {blocked > 0 && <span className="chip-count">{blocked.toLocaleString('en-US')}</span>}
+    </span>
   );
 }
 
@@ -35,42 +51,51 @@ export function ProgressBar() {
 export function Toolbar() {
   const state = useStore(appStore, (s) => s.status?.state ?? 'stopped');
   const connected = useStore(appStore, (s) => s.connection === 'open');
+  const appOnly = useStore(appStore, (s) => s.status?.appOnlyTraffic ?? false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const canStart = connected && (state === 'stopped' || state === 'error');
   const canStop = connected && state !== 'stopped' && state !== 'stopping';
   const canRestart = connected && (RUNNING_STATES.has(state) || state === 'error');
 
   const items: MenuItem[] = [
-    { id: 'snapshots', label: 'Snapshots…', onSelect: () => actions.openDialog('snapshots') },
-    { id: 'reset', label: 'Reset sandbox…', onSelect: () => actions.openDialog('reset') },
-    { id: 'diagnostics', label: 'Diagnostics…', separatorBefore: true, onSelect: () => actions.openDialog('diagnostics') },
-    { id: 'bundle', label: 'Save diagnostic bundle', onSelect: () => downloadHref(links.diagnosticsBundle()) },
+    {
+      id: 'app-only',
+      label: 'Only capture the app under test',
+      hint: 'Block Android system traffic (sandbox firewall)',
+      checked: appOnly,
+      onSelect: () => void actions.setAppOnly(!appOnly),
+    },
+    { id: 'snapshots', label: 'Snapshots…', icon: 'camera', separatorBefore: true, onSelect: () => actions.openDialog('snapshots') },
+    { id: 'reset', label: 'Reset sandbox…', icon: 'trash', onSelect: () => actions.openDialog('reset') },
+    { id: 'diagnostics', label: 'Diagnostics…', icon: 'info', separatorBefore: true, onSelect: () => actions.openDialog('diagnostics') },
+    { id: 'bundle', label: 'Save diagnostic bundle', icon: 'download', onSelect: () => downloadHref(links.diagnosticsBundle()) },
   ];
 
   return (
     <div className="toolbar" role="toolbar" aria-label="Sandbox">
-      <button className="btn primary" onClick={() => pickApk((f) => void actions.uploadApk(f))} title="Install and run an APK">
+      <button className="btn primary" onClick={() => pickApk((f) => void actions.uploadApk(f))} title="Install and run an APK (or drop one anywhere)">
         <Icon name="upload" /> Install APK
       </button>
       <span className="toolbar-sep" />
-      <button className="btn" disabled={!canStart} onClick={() => void actions.start()} title="Start the Android sandbox">
+      <button className="btn ghost" disabled={!canStart} onClick={() => void actions.start()} title="Start the Android sandbox">
         <Icon name="play" /> Start
       </button>
-      <button className="btn" disabled={!canStop} onClick={() => void actions.stop()} title="Stop the Android sandbox">
+      <button className="btn ghost" disabled={!canStop} onClick={() => void actions.stop()} title="Stop the Android sandbox">
         <Icon name="stop" /> Stop
       </button>
-      <button className="btn" disabled={!canRestart} onClick={() => void actions.restart()} title="Restart the Android sandbox">
+      <button className="btn ghost" disabled={!canRestart} onClick={() => void actions.restart()} title="Restart the Android sandbox">
         <Icon name="restart" /> Restart
       </button>
+      <span className="spacer" />
       <button
         className="icon-btn more-btn"
         aria-label="More sandbox actions"
-        title="More"
+        title="Settings and more"
         aria-haspopup="menu"
         aria-expanded={!!menu}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
-          setMenu(menu ? null : { x: r.left, y: r.bottom + 4 });
+          setMenu(menu ? null : { x: r.right - 300, y: r.bottom + 4 });
         }}
       >
         <Icon name="more" />
@@ -90,7 +115,7 @@ export function Banners() {
     <>
       {connection !== 'open' && (everConnected || connection === 'closed') && (
         <div className="banner reconnect" role="status">
-          <span className="spinner" aria-hidden="true" /> Reconnecting to core…
+          <span className="spinner" aria-hidden="true" /> Reconnecting to the droidpector core…
         </div>
       )}
       {visible.map((w) => (

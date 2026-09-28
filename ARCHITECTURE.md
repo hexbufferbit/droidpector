@@ -233,6 +233,38 @@ connects through the sandbox network and asks adbd to restart as root (the
 sync require. Without root the sandbox still works, with HTTPS payload
 inspection reported as unavailable.
 
+### ADR-014 — App-only traffic enforced inside the guest
+
+Requirement: every connection of the sandbox OS other than the app under
+test must be blocked. The gateway learns socket ownership asynchronously
+(polling `/proc/net/tcp`), which is fine for labeling but not for
+enforcement. The only place where the sender's UID is known synchronously is
+the guest kernel, so the firewall is an iptables `owner` chain programmed
+over ADB (root) — exactly how Android's own per-app restrictions work.
+Consequences: blocked traffic never reaches the gateway (no noise, no leak);
+DNS cannot be attributed per app and stays open; the gateway's egress
+policy remains as defence in depth.
+
+### ADR-015 — Phone-shaped display via EDID, rotation via Android
+
+The guest display advertises the phone resolution (720×1280) through the
+emulated VGA's EDID; the bochs-drm driver adopts it, so Android boots with a
+portrait framebuffer and `wm density 320` gives phone scaling. Rotation uses
+Android's `user_rotation` (apps really get a landscape configuration) and is
+rendered into the same framebuffer; the UI counter-rotates the canvas and
+inverse-maps pointer input. This avoids per-frame rotation in the core and
+keeps a single, tested display path. Pointer input: QEMU's absolute USB tablet is handled by Android-x86 as a
+mouse whose Y axis is double-scaled in rotated displays (measured on the real
+VM: the cursor is pinned to the top strip in landscape, with either input
+configuration), so it cannot drive apps after rotation. Clicks are therefore
+delivered by a small **in-guest touch agent** (`cmd/droidpector-agent`, a
+static Go binary pushed over ADB) that creates a virtual touchscreen with
+`/dev/uinput` and receives finger events from the core through the sandbox
+network. Android treats it like a phone's panel (orientation-aware, real
+touch semantics: long-press, scroll gestures); the UI sends the framebuffer
+pixel under the cursor. The emulated mouse remains the fallback for hover
+and for guests without the agent.
+
 ---
 
 ## 4. Dependencies

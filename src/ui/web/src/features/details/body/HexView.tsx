@@ -16,7 +16,7 @@ export function HexView({ bytes, downloadHref }: { bytes: Uint8Array; downloadHr
           )}
         </div>
       )}
-      <pre className="code-view mono" aria-label="Hex dump">
+      <pre className="code-view mono hexdump" aria-label="Hex dump">
         {dump.text}
       </pre>
     </div>

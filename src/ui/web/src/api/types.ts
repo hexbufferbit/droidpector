@@ -45,6 +45,12 @@ export interface Status {
   app?: AppState;
   displayReady: boolean;
   since: string;
+  /** sandbox firewall: only the app under test may reach the network (absent on older cores) */
+  appOnlyTraffic?: boolean;
+  /** flows blocked by the app-only firewall */
+  blockedFlows?: number;
+  /** display orientation in quarter turns clockwise (0 = portrait); absent on older cores */
+  orientation?: number;
 }
 
 export interface RuntimeInfo {

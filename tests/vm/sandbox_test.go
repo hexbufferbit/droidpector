@@ -181,6 +181,18 @@ func TestSandboxEndToEnd(t *testing.T) {
 	if ev.Status != 200 || ev.Scheme != "https" || ev.Protocol == "" {
 		t.Fatalf("event: %+v", ev)
 	}
+	// Attribution is refreshed asynchronously (socket table polling); it may
+	// arrive a moment after the event completes.
+	for i := 0; i < 30 && ev.Package == ""; i++ {
+		time.Sleep(time.Second)
+		if p, err := h.app.Query.Query(ctx, query.Request{SessionID: h.app.Sandbox.Status().SessionID, Filter: "path:/test/get", Limit: 10}); err == nil {
+			for _, r := range p.Rows {
+				if r.ID == ev.ID {
+					ev = r
+				}
+			}
+		}
+	}
 	if ev.Package != "com.apkinspector.testapp" {
 		t.Errorf("package attribution: got %q", ev.Package)
 	}
@@ -189,11 +201,60 @@ func TestSandboxEndToEnd(t *testing.T) {
 		t.Fatalf("detail: %+v %v", full, err)
 	}
 
-	// Click the POST button through the embedded display (the path the UI uses).
-	h.tapText(ctx, "POST")
-	post := h.waitEvent("POST via display click", "method:POST path:/test/post", 3*time.Minute)
+	// App-only firewall: the shell user (a "system" process) must be rejected
+	// while the app under test (allowed above) works; the counter reports it.
+	st = h.app.Sandbox.Status()
+	if !st.AppOnly {
+		t.Fatal("app-only firewall should be on by default")
+	}
+	out, code, err = dev.Run(ctx, "curl -sk --max-time 10 -o /dev/null -w '%{http_code}' https://"+testHost+"/test/get; echo \" exit=$?\"")
+	if err != nil || !strings.Contains(out, "exit=7") && !strings.Contains(out, "exit=28") {
+		t.Fatalf("system-uid connection was not blocked: %q code=%d err=%v", out, code, err)
+	}
+	fwDeadline := time.Now().Add(30 * time.Second)
+	for h.app.Sandbox.Status().BlockedFlows == 0 && time.Now().Before(fwDeadline) {
+		time.Sleep(time.Second)
+	}
+	if h.app.Sandbox.Status().BlockedFlows == 0 {
+		t.Fatal("blockedFlows counter did not increase")
+	}
+	h.app.Sandbox.SetAppOnly(ctx, false)
+	out, _, err = dev.Run(ctx, "curl -sk --max-time 20 -o /dev/null -w '%{http_code}' https://"+testHost+"/test/get")
+	if err != nil || !strings.Contains(out, "200") {
+		t.Fatalf("with app-only off the system user should reach the network: %q %v", out, err)
+	}
+	h.app.Sandbox.SetAppOnly(ctx, true)
+	if w, hh := h.app.Streamer.Connected(), h.app.Sandbox.Profile().EffectiveDisplay(); !w || hh.Width != 720 || hh.Height != 1280 {
+		t.Fatalf("display: connected=%v geometry=%+v", w, hh)
+	}
+	if st := h.app.Sandbox.Status(); !st.TouchInput {
+		t.Fatalf("touch input should be active: %+v", st.Warnings)
+	}
+
+	// Rotation: Android must accept the forced orientation and report it.
+	if err := h.app.Sandbox.Rotate(ctx, 1); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if out, _, _ := dev.Run(ctx, "settings get system user_rotation"); strings.TrimSpace(out) != "1" || h.app.Sandbox.Status().Orientation != 1 {
+		t.Fatalf("rotation not applied: %q status=%d", out, h.app.Sandbox.Status().Orientation)
+	}
+	// Click the POST button through the embedded display while rotated (this
+	// validates the logical→framebuffer mapping the UI relies on), then the
+	// Error button back in portrait.
+	// Bring the app to the front after the configuration change before tapping.
+	dev.Run(ctx, "am start -W -n com.apkinspector.testapp/.MainActivity")
+	h.tapText(ctx, "POST", 1)
+	post := h.waitEvent("POST via display click (landscape)", "method:POST path:/test/post", 3*time.Minute)
 	if post.Status != 201 {
 		t.Fatalf("POST event: %+v", post)
+	}
+	if err := h.app.Sandbox.Rotate(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	dev.Run(ctx, "am start -W -n com.apkinspector.testapp/.MainActivity")
+	h.tapText(ctx, "Error", 0)
+	if ev := h.waitEvent("Error via display click (portrait)", "path:/test/error", 3*time.Minute); ev.Status != 500 {
+		t.Fatalf("Error event: %+v", ev)
 	}
 
 	// Replay from the host.
@@ -258,37 +319,81 @@ func TestSandboxEndToEnd(t *testing.T) {
 	h.waitEvent("image after quick start", "path:/test/image", 3*time.Minute)
 }
 
-var boundsRe = regexp.MustCompile(`text="([^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"`)
+var (
+	boundsRe = regexp.MustCompile(`text="([^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"`)
+	rootRe   = regexp.MustCompile(`bounds="\[0,0\]\[(\d+),(\d+)\]"`)
+)
 
-// tapText finds a view by its text with uiautomator and clicks its centre by
-// sending pointer events through the display streamer, exactly like the UI.
-func (h *harness) tapText(ctx context.Context, text string) {
+// tapText finds a view by its text with uiautomator and clicks it by sending
+// pointer events through the display streamer, exactly like the UI does:
+// uiautomator reports logical (rotated) coordinates, while the pointer
+// device works in framebuffer coordinates, so the point is mapped with the
+// same convention the UI uses (Android draws orientation 1 rotated 90° CW).
+func (h *harness) tapText(ctx context.Context, text string, orientation int) {
 	h.t.Helper()
 	dev, err := h.app.Sandbox.Device()
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	var x, y int
-	deadline := time.Now().Add(2 * time.Minute)
-	for x == 0 && time.Now().Before(deadline) {
+	disp := h.app.Sandbox.Profile().EffectiveDisplay()
+	fbW, fbH := disp.Width, disp.Height
+	var lx, ly int
+	deadline := time.Now().Add(4 * time.Minute)
+	var last string
+	for lx == 0 && time.Now().Before(deadline) {
 		out, _, err := dev.Run(ctx, "uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; cat /sdcard/ui.xml")
+		last = out
 		if err == nil {
-			for _, m := range boundsRe.FindAllStringSubmatch(out, -1) {
-				if strings.EqualFold(m[1], text) {
-					x1, _ := strconv.Atoi(m[2])
-					y1, _ := strconv.Atoi(m[3])
-					x2, _ := strconv.Atoi(m[4])
-					y2, _ := strconv.Atoi(m[5])
-					x, y = (x1+x2)/2, (y1+y2)/2
+			landscape := false
+			if m := rootRe.FindStringSubmatch(out); m != nil {
+				w, _ := strconv.Atoi(m[1])
+				hh, _ := strconv.Atoi(m[2])
+				landscape = w > hh
+			}
+			if landscape == (orientation%2 == 1) { // layout matches the requested orientation
+				for _, m := range boundsRe.FindAllStringSubmatch(out, -1) {
+					if strings.EqualFold(m[1], text) {
+						x1, _ := strconv.Atoi(m[2])
+						y1, _ := strconv.Atoi(m[3])
+						x2, _ := strconv.Atoi(m[4])
+						y2, _ := strconv.Atoi(m[5])
+						lx, ly = (x1+x2)/2, (y1+y2)/2
+					}
 				}
 			}
 		}
-		if x == 0 {
+		if lx == 0 {
 			time.Sleep(2 * time.Second)
 		}
 	}
-	if x == 0 {
-		h.t.Fatalf("view %q not found on screen", text)
+	if lx == 0 {
+		texts := boundsRe.FindAllStringSubmatch(last, -1)
+		var seen []string
+		for _, m := range texts {
+			if m[1] != "" {
+				seen = append(seen, m[1])
+			}
+		}
+		root := rootRe.FindStringSubmatch(last)
+		h.dumpDiagnostics()
+		h.t.Fatalf("view %q not found on screen in orientation %d (root %v, texts %v)", text, orientation, root, seen)
+	}
+	// Touches are injected as a real touchscreen aligned with the panel, so
+	// the point to send is where the logical pixel sits in the natural
+	// framebuffer (Android draws orientation 1 rotated 90° clockwise).
+	var x, y int
+	switch orientation {
+	case 1:
+		x, y = fbW-ly, lx
+	case 2:
+		x, y = fbW-lx, fbH-ly
+	case 3:
+		x, y = ly, fbH-lx
+	default:
+		x, y = lx, ly
+	}
+	if !h.app.Streamer.TouchEnabled() {
+		h.t.Fatal("touch input is not active (agent missing or unreachable)")
 	}
 	for i := 0; i < 50 && !h.app.Streamer.Connected(); i++ {
 		time.Sleep(200 * time.Millisecond)

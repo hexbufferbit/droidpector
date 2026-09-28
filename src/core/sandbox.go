@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/droidpector/apkinspector/src/android/adb"
+	"github.com/droidpector/apkinspector/src/android/agent"
 	"github.com/droidpector/apkinspector/src/android/device"
 	"github.com/droidpector/apkinspector/src/display"
 	"github.com/droidpector/apkinspector/src/network"
@@ -60,6 +62,10 @@ type Status struct {
 	Warnings      []string   `json:"warnings,omitempty"`
 	Error         *ErrorInfo `json:"error,omitempty"`
 	CaptureActive bool       `json:"captureActive"`
+	AppOnly       bool       `json:"appOnlyTraffic"` // only the app under test may reach the network
+	BlockedFlows  int64      `json:"blockedFlows"`   // packets the sandbox firewall rejected this boot
+	Orientation   int        `json:"orientation"`    // display rotation in quarter turns (0 = portrait)
+	TouchInput    bool       `json:"touchInput"`     // pointer input is delivered as real touches (in-guest agent)
 	HTTPSInspect  bool       `json:"httpsInspection"`
 	CAFingerprint string     `json:"caFingerprint,omitempty"`
 	SessionID     string     `json:"sessionId,omitempty"`
@@ -89,6 +95,7 @@ type SandboxConfig struct {
 	AutoRestart     bool
 	UseBootSnapshot bool
 	InspectHTTPS    bool
+	AppOnly         bool // initial state of the app-only firewall
 	ADBKey          *rsa.PrivateKey
 }
 
@@ -118,6 +125,9 @@ type Sandbox struct {
 	app       *AppState
 	owners    *ownerTable
 	ownerPoke chan struct{}
+
+	appOnly bool           // sandbox firewall: only allowed apps may reach the network
+	allowed map[string]int // package → uid of the apps under test
 }
 
 // NewSandbox wires the orchestrator.
@@ -127,8 +137,8 @@ func NewSandbox(cfg SandboxConfig, log, vmLog *slog.Logger, procs *platform.Proc
 		cfg.BootTimeout = 10 * time.Minute
 	}
 	s := &Sandbox{cfg: cfg, log: log, vmLog: vmLog, procs: procs, gw: gw, sessions: sessions, rec: rec, streamer: streamer,
-		onStatus: onStatus, owners: newOwnerTable(), ownerPoke: make(chan struct{}, 1)}
-	s.status = Status{State: StateStopped, Message: "Sandbox stopped", Since: time.Now()}
+		onStatus: onStatus, owners: newOwnerTable(), ownerPoke: make(chan struct{}, 1), appOnly: cfg.AppOnly, allowed: map[string]int{}}
+	s.status = Status{State: StateStopped, Message: "Sandbox stopped", Since: time.Now(), AppOnly: cfg.AppOnly}
 	rec.SetOwnerLookup(s.owners.lookup)
 	return s
 }
@@ -484,6 +494,11 @@ func (s *Sandbox) provisionBase(ctx context.Context) {
 		"settings put global verifier_verify_adb_installs 0",
 		"settings put system screen_off_timeout 2147483647",
 		"svc power stayon true",
+		// No captive-portal probes: they are system traffic (blocked by the
+		// app-only firewall) and would otherwise mark the network as limited.
+		"settings put global captive_portal_mode 0",
+		"settings put global captive_portal_detection_enabled 0",
+		fmt.Sprintf("wm density %d", s.Profile().EffectiveDisplay().Density), // phone-like UI scale
 	}
 	for _, c := range cmds {
 		if _, _, err := dev.Run(ctx, c); err != nil {
@@ -528,7 +543,144 @@ func (s *Sandbox) provision(ctx context.Context) error {
 	}
 	s.gw.SetCA(ca)
 	s.update(func(st *Status) { st.HTTPSInspect, st.CAFingerprint = true, ca.Fingerprint() })
+	s.applyFirewall(ctx)
+	if n, err := dev.Rotation(ctx); err == nil {
+		s.update(func(st *Status) { st.Orientation = n })
+	}
+	s.provisionTouch(ctx, dev)
 	return nil
+}
+
+// provisionTouch installs and starts the in-guest touch agent and routes
+// pointer input through it. Without it (agent not built in, /dev/uinput
+// missing) the emulated mouse is used, which only works in portrait.
+func (s *Sandbox) provisionTouch(ctx context.Context, dev *device.Device) {
+	bin := agent.Binary("amd64")
+	if bin == nil {
+		s.log.Warn("touch agent not built into this executable; using the emulated mouse (portrait only)")
+		return
+	}
+	disp := s.Profile().EffectiveDisplay()
+	// Reuse a running agent (snapshot restore) or (re)install and start it.
+	if _, err := s.dialTouch(ctx); err != nil {
+		if err := dev.Push(ctx, bytes.NewReader(bin), int64(len(bin)), agent.RemotePath, 0o755, time.Now()); err != nil {
+			s.log.Warn("could not install the touch agent", "err", err)
+			return
+		}
+		cmd := fmt.Sprintf("chmod 755 %s; (nohup %s -listen :%d -width %d -height %d >/data/local/tmp/droidpector-agent.log 2>&1 &); sleep 1; cat /data/local/tmp/droidpector-agent.log",
+			agent.RemotePath, agent.RemotePath, agent.Port, disp.Width, disp.Height)
+		out, _, err := dev.Run(ctx, cmd)
+		s.log.Info("touch agent started", "output", strings.TrimSpace(out), "err", err)
+	}
+	var client *agent.Client
+	var err error
+	for i := 0; i < 10 && client == nil; i++ {
+		if client, err = s.dialTouch(ctx); err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+	if client == nil {
+		s.log.Warn("touch agent unreachable; using the emulated mouse (portrait only)", "err", err)
+		s.warn("Touch input is unavailable in this sandbox; clicks work in portrait only.")
+		return
+	}
+	s.streamer.SetTouch(client)
+	s.update(func(st *Status) { st.TouchInput = true })
+	s.log.Info("touch input active", "panel", fmt.Sprintf("%dx%d", client.W, client.H))
+}
+
+func (s *Sandbox) dialTouch(ctx context.Context) (*agent.Client, error) {
+	dctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return agent.Dial(dctx, func(ctx context.Context) (net.Conn, error) { return s.gw.Stack().DialGuest(ctx, agent.Port) })
+}
+
+// Rotate sets the Android display orientation (quarter turns, 0 = portrait).
+// Android renders the rotated UI into the same framebuffer; the display
+// stream reports the orientation so the UI can show it upright.
+func (s *Sandbox) Rotate(ctx context.Context, orientation int) error {
+	dev, err := s.Device()
+	if err != nil {
+		return err
+	}
+	if err := dev.SetRotation(ctx, orientation); err != nil {
+		return &UserError{Code: "rotate", Title: "The display could not be rotated.", Details: err.Error()}
+	}
+	s.update(func(st *Status) { st.Orientation = orientation })
+	return nil
+}
+
+// applyFirewall programs the in-guest firewall from the current app-only
+// setting and the allowed packages. Failures are reported as warnings; the
+// sandbox keeps working without the restriction.
+func (s *Sandbox) applyFirewall(ctx context.Context) {
+	dev, err := s.Device()
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	enabled := s.appOnly
+	uids := make([]int, 0, len(s.allowed))
+	for _, uid := range s.allowed {
+		uids = append(uids, uid)
+	}
+	s.mu.Unlock()
+	if !enabled {
+		if err := dev.ClearAppFirewall(ctx); err != nil {
+			s.log.Warn("could not remove the sandbox firewall", "err", err)
+		}
+		return
+	}
+	if err := dev.SetAppFirewall(ctx, device.FirewallRules{AllowUIDs: uids, AllowDNS: true}); err != nil {
+		s.log.Warn("could not apply the sandbox firewall", "err", err)
+		s.warn("Android system traffic could not be blocked (" + err.Error() + "); all sandbox traffic is captured.")
+		return
+	}
+	s.log.Info("sandbox firewall applied", "allowedUids", uids)
+}
+
+// SetAppOnly turns the app-only firewall on or off (persisting for this run).
+func (s *Sandbox) SetAppOnly(ctx context.Context, enabled bool) {
+	s.mu.Lock()
+	s.appOnly = enabled
+	s.mu.Unlock()
+	s.update(func(st *Status) { st.AppOnly = enabled })
+	if s.Running() {
+		s.applyFirewall(ctx)
+	}
+}
+
+// AllowPackage lets an installed package (the app under test) through the
+// firewall; the rules are refreshed immediately.
+func (s *Sandbox) AllowPackage(ctx context.Context, pkg string) error {
+	dev, err := s.Device()
+	if err != nil {
+		return err
+	}
+	uid, err := dev.PackageUID(ctx, pkg)
+	if err != nil {
+		return fmt.Errorf("looking up the app's user id: %w", err)
+	}
+	s.mu.Lock()
+	s.allowed[pkg] = uid
+	s.mu.Unlock()
+	s.applyFirewall(ctx)
+	return nil
+}
+
+// DisallowPackage removes a package from the firewall allow list.
+func (s *Sandbox) DisallowPackage(ctx context.Context, pkg string) {
+	s.mu.Lock()
+	_, had := s.allowed[pkg]
+	delete(s.allowed, pkg)
+	s.mu.Unlock()
+	if had && s.Running() {
+		s.applyFirewall(ctx)
+	}
 }
 
 func (s *Sandbox) warn(msg string) {
@@ -583,6 +735,8 @@ func (s *Sandbox) stop(ctx context.Context, endSession, saveState bool) {
 	if cancel != nil {
 		cancel()
 	}
+	s.streamer.SetTouch(nil)
+	s.update(func(st *Status) { st.TouchInput = false })
 	m.Stop(10 * time.Second)
 	s.gw.SetCA(nil)
 	s.owners.reset()
@@ -591,6 +745,7 @@ func (s *Sandbox) stop(ctx context.Context, endSession, saveState bool) {
 	}
 	s.update(func(st *Status) {
 		st.State, st.Message, st.CaptureActive, st.HTTPSInspect, st.CAFingerprint = StateStopped, "Sandbox stopped", false, false, ""
+		st.BlockedFlows = 0
 		if endSession {
 			st.SessionID = ""
 		}
@@ -887,7 +1042,7 @@ func (s *Sandbox) NewFlow(netip.AddrPort) {
 // every second, and immediately (debounced) when the guest opens a connection.
 func (s *Sandbox) pollOwners(ctx context.Context) {
 	var uidPkg map[int]string
-	var pkgsAt time.Time
+	var pkgsAt, blockedAt time.Time
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
@@ -929,6 +1084,19 @@ func (s *Sandbox) pollOwners(ctx context.Context) {
 		}
 		s.owners.merge(ports)
 		s.rec.Reattribute()
+		if s.status.AppOnly && time.Since(blockedAt) > 5*time.Second {
+			bctx, bcancel := context.WithTimeout(ctx, 5*time.Second)
+			if n, err := dev.FirewallBlockedCount(bctx); err == nil {
+				blockedAt = time.Now()
+				s.mu.Lock()
+				changed := n != s.status.BlockedFlows
+				s.mu.Unlock()
+				if changed {
+					s.update(func(st *Status) { st.BlockedFlows = n })
+				}
+			}
+			bcancel()
+		}
 	}
 }
 

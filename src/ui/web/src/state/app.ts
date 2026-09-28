@@ -220,6 +220,31 @@ export const actions = {
   restart: () => run(() => api.restartSandbox(), { retryStart: true }),
   reset: () => run(() => api.resetSandbox()),
 
+  /** rotate sets the display orientation; older cores without the endpoint keep portrait. */
+  async rotate(orientation: number) {
+    const o = ((orientation % 4) + 4) % 4;
+    try {
+      await api.rotate(o);
+      appStore.set((s) => (s.status ? { status: { ...s.status, orientation: o } } : {}));
+    } catch (err) {
+      const e = toApiError(err);
+      if (e.status === 404 || e.status === 405 || e.status === 501) toast('This droidpector core cannot rotate the display', 'error');
+      else showError(err);
+    }
+  },
+
+  /** setAppOnly toggles "only capture the app under test"; the status message reports the new value. */
+  async setAppOnly(enabled: boolean) {
+    const ok = await run(async () => {
+      await api.setAppOnly(enabled);
+      return true;
+    });
+    if (ok) {
+      appStore.set((s) => (s.status ? { status: { ...s.status, appOnlyTraffic: enabled } } : {}));
+      toast(enabled ? 'Only the app under test can reach the network' : 'Android system traffic is captured again');
+    }
+  },
+
   selectEvent(id: string | null) {
     appStore.set({ selectedEventId: id });
   },

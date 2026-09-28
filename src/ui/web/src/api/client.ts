@@ -218,6 +218,8 @@ export const api = {
   stopSandbox: () => send('/api/sandbox/stop'),
   restartSandbox: () => send('/api/sandbox/restart'),
   resetSandbox: () => send('/api/sandbox/reset'),
+  /** setAppOnly toggles the sandbox firewall that blocks Android system traffic. */
+  setAppOnly: (enabled: boolean) => send('/api/sandbox/app-only', { json: { enabled } }),
 
   snapshots: () => json<Snapshot[]>('/api/snapshots'),
   saveSnapshot: (name: string) => send('/api/snapshots', { json: { name } }),
@@ -230,6 +232,8 @@ export const api = {
   reinstallApk: (id: string) => send(`/api/apks/${enc(id)}/reinstall`),
   appAction: (pkg: string, action: 'launch' | 'stop' | 'clear' | 'uninstall') => send(`/api/apps/${enc(pkg)}/${action}`),
   paste: (text: string) => send('/api/display/paste', { json: { text } }),
+  /** rotate sets the display orientation (quarter turns clockwise, 0 = portrait). */
+  rotate: (orientation: number) => send('/api/display/rotate', { json: { orientation } }),
 
   sessions: () => json<Session[]>('/api/sessions'),
   session: (id: string) => json<Session>(`/api/sessions/${enc(id)}`),

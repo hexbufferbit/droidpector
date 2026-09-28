@@ -23,6 +23,7 @@ type Config struct {
 
 	// Network
 	InspectHTTPS  bool     `json:"inspectHttps"`
+	AppOnly       bool     `json:"appOnlyTraffic"` // only the app under test may reach the network
 	BlockPrivate  bool     `json:"blockPrivateNetworks"`
 	BlockQUIC     bool     `json:"blockQuic"`
 	MaxBodyMB     int      `json:"maxBodyMB"`
@@ -43,7 +44,7 @@ func DefaultConfig() Config {
 	return Config{
 		MemoryMB: 4096, CPUs: 4, Accelerator: "auto", DefaultRuntime: "x86_64", BootTimeoutSec: 600,
 		AutoRestart: true, UseBootSnapshot: true,
-		InspectHTTPS: true, BlockQUIC: true, MaxBodyMB: 10,
+		InspectHTTPS: true, AppOnly: true, BlockQUIC: true, MaxBodyMB: 10,
 		KeepSessions: 50, KeepDays: 30, WriteQueue: 8192,
 		LogLevel: "INFO",
 	}

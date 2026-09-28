@@ -194,6 +194,18 @@ func (e *Event) URL() string {
 	if e.Host == "" {
 		return ""
 	}
+	switch e.Kind {
+	case KindTCP, KindUDP, KindTLS:
+		// Non-HTTP flows: an address in URL form (tcp://host:port), never a
+		// scheme-less "//host/" that looks like a broken web URL.
+		scheme := strings.ToLower(string(e.Kind))
+		if e.Kind == KindTLS && e.Scheme == "https" {
+			scheme = "https"
+		}
+		return scheme + "://" + HostPort(scheme, e.Host, e.Port)
+	case KindDNS:
+		return "dns://" + e.Host
+	}
 	u := url.URL{Scheme: e.Scheme, Host: HostPort(e.Scheme, e.Host, e.Port), Opaque: ""}
 	path := e.Path
 	if path == "" {

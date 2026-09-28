@@ -550,7 +550,12 @@ func (f *flow) passthroughTLS(pc *peekConn, hello *ClientHello, sni, reason stri
 		TLS: tlsInfo(sni, hello, nil, false, reason), Conn: f.conn(f.upstream.RemoteAddr().String()),
 	}
 	f.g.emit(e)
-	up, down, err := relay(pc, f.upstream)
+	upTap, downTap := newStreamTap(0), newStreamTap(0) // encrypted: count only
+	up, down, err := relayLive(pc, f.upstream, upTap, downTap, func(up, down int64) {
+		e.RequestSize, e.ResponseSize, e.DurationMs = up, down, ms(time.Since(f.started))
+		e.Conn.BytesUp, e.Conn.BytesDown = up, down
+		f.g.emit(e)
+	})
 	e.State, e.DurationMs = model.StateComplete, ms(time.Since(f.started))
 	e.RequestSize, e.ResponseSize = up, down
 	e.Conn.BytesUp, e.Conn.BytesDown = up, down
@@ -571,11 +576,35 @@ func (f *flow) relayRaw(client io.ReadWriter, proto, note string) {
 	if proto == "TLS" {
 		e.Kind = model.KindTLS
 	}
+	capture := 0
+	if proto == "TCP" {
+		capture = int(min(f.g.opts.MaxBodyBytes, 1<<20)) // opaque streams: keep a 1 MiB prefix at most
+		if pc, ok := client.(*peekConn); ok {
+			if first, _ := pc.r.Peek(min(pc.r.Buffered(), 16)); len(first) > 0 {
+				if p := identifyProtocol(f.dst, first); p != "" {
+					e.Protocol = p
+				}
+			}
+		}
+		if e.Protocol == "TCP" {
+			if p := identifyProtocol(f.dst, nil); p != "" {
+				e.Protocol = p
+			}
+		}
+	}
 	f.g.emit(e)
-	up, down, err := relay(client, f.upstream)
+	upTap, downTap := newStreamTap(capture), newStreamTap(capture)
+	up, down, err := relayLive(client, f.upstream, upTap, downTap, func(up, down int64) {
+		e.RequestSize, e.ResponseSize, e.DurationMs = up, down, ms(time.Since(f.started))
+		e.Conn.BytesUp, e.Conn.BytesDown = up, down
+		f.g.emit(e)
+	})
 	e.State, e.DurationMs = model.StateComplete, ms(time.Since(f.started))
 	e.RequestSize, e.ResponseSize = up, down
 	e.Conn.BytesUp, e.Conn.BytesDown = up, down
+	if capture > 0 {
+		e.RequestBody, e.ResponseBody = f.g.storeTap(upTap), f.g.storeTap(downTap)
+	}
 	if err != nil && e.Error == "" {
 		e.Error = err.Error()
 	}
@@ -587,34 +616,6 @@ func (f *flow) dnsTime() time.Duration {
 		return time.Duration(e.tookMs * float64(time.Millisecond))
 	}
 	return -1
-}
-
-// relay copies both directions until both are done and returns byte counts.
-func relay(client io.ReadWriter, upstream net.Conn) (up, down int64, err error) {
-	var wg sync.WaitGroup
-	var upErr error
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		up, upErr = io.Copy(upstream, client)
-		if cw, ok := upstream.(interface{ CloseWrite() error }); ok {
-			cw.CloseWrite()
-		}
-	}()
-	down, err = io.Copy(client, upstream)
-	if cw, ok := client.(interface{ CloseWrite() error }); ok {
-		cw.CloseWrite()
-	} else if c, ok := client.(io.Closer); ok {
-		c.Close()
-	}
-	wg.Wait()
-	if err == nil {
-		err = upErr
-	}
-	if isClosedErr(err) {
-		err = nil
-	}
-	return up, down, err
 }
 
 func isClosedErr(err error) bool {

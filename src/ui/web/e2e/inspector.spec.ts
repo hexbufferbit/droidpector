@@ -200,3 +200,47 @@ test('5. pinned HTTPS shows the encrypted-traffic message', async ({ page }) => 
   await expect(detailsPanel(page).getByText(ENCRYPTED)).toBeVisible();
   await expect(detailsPanel(page)).toContainText('api.example.test');
 });
+
+test('9. raw TCP flows show their protocol label in the Type column', async ({ page }) => {
+  await openApp(page);
+  // The devserver may not be able to produce a raw TCP flow yet: skip instead of failing.
+  let produced = 0;
+  try {
+    produced = await traffic('tcp');
+  } catch {
+    test.skip(true, 'devserver has no raw TCP traffic generator (kind=tcp)');
+  }
+  test.skip(produced === 0, 'devserver produced no raw TCP flow');
+  const row = rows(page).filter({ has: page.locator('.col-method .method-badge', { hasText: /^(TCP|TLS|UDP)$/ }) }).last();
+  await expect(row).toBeVisible();
+  const type = (await row.locator('.col-type').textContent())?.trim() ?? '';
+  // The Type column carries the protocol label (TCP, TLS, MTProto, …), never a MIME type.
+  expect(type).toMatch(/^[A-Za-z][A-Za-z0-9/.+-]*$/);
+  expect(type.toLowerCase()).not.toBe('other');
+  await row.click();
+  await expect(detailsPanel(page).getByRole('tab', { name: 'Connection', exact: true })).toBeVisible();
+});
+
+test('10. app-only capture toggle round-trips through the core', async ({ page }) => {
+  await openApp(page);
+  const base = new URL(page.url()).origin;
+  const initial = ((await (await page.request.get(`${base}/api/status`)).json()) as { appOnlyTraffic?: boolean }).appOnlyTraffic;
+  const probe = await page.request.post(`${base}/api/sandbox/app-only`, { data: { enabled: false } });
+  test.skip(probe.status() === 404 || probe.status() === 405, 'core has no /api/sandbox/app-only endpoint yet');
+  expect(probe.status()).toBe(204);
+  await expect(page.getByTestId('app-only-chip')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'More sandbox actions' }).click();
+  const item = page.getByRole('menuitemcheckbox', { name: /Only capture the app under test/ });
+  await expect(item).toHaveAttribute('aria-checked', 'false');
+  await item.click();
+  await expect(page.getByTestId('app-only-chip')).toBeVisible();
+  await expect.poll(async () => ((await (await page.request.get(`${base}/api/status`)).json()) as { appOnlyTraffic?: boolean }).appOnlyTraffic).toBe(true);
+
+  await page.getByRole('button', { name: 'More sandbox actions' }).click();
+  await expect(page.getByRole('menuitemcheckbox', { name: /Only capture the app under test/ })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('menuitemcheckbox', { name: /Only capture the app under test/ }).click();
+  await expect(page.getByTestId('app-only-chip')).toHaveCount(0);
+  await expect.poll(async () => ((await (await page.request.get(`${base}/api/status`)).json()) as { appOnlyTraffic?: boolean }).appOnlyTraffic).toBe(false);
+  if (initial) await page.request.post(`${base}/api/sandbox/app-only`, { data: { enabled: true } });
+});

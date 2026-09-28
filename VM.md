@@ -25,7 +25,12 @@ androidboot.selinux=permissive SETUPWIZARD=0`
   `DATA=vda` mounts the first virtio disk (the sandbox disk) as `/data`.
 - `androidboot.enable_console=1` + `console=ttyS0` give a root console on the
   serial port (bootstrap/diagnostic channel).
-- `nomodeset HWACCEL=0`: software rendering (no host GPU dependency).
+- `HWACCEL=0`: software rendering (no host GPU dependency). The modesetting
+  driver (bochs-drm) is kept so the display adopts the EDID-advertised phone
+  resolution from the profile's `display` (720×1280 @ 320 dpi by default;
+  `wm density` is applied at provisioning). Rotation is real Android
+  rotation (`user_rotation`), rendered into the same framebuffer and
+  counter-rotated by the UI.
 - The image is `userdebug` (`ro.adb.secure=0`, adbd listens on TCP 5555 and
   can restart as root) and includes `libndk_translation`, so arm64-v8a and
   armeabi-v7a APKs run on the x86_64 VM.
@@ -49,7 +54,8 @@ Built by `vm.BuildArgs` (pure function, unit tested):
 -blockdev file(iso, read-only) → raw  -device ide-cd
 -blockdev file(data.qcow2) → qcow2 node "data"  -device virtio-blk-pci
 -netdev socket,connect=127.0.0.1:<gateway>  -device virtio-net-pci       ← the only NIC
--vga std  -device qemu-xhci + usb-tablet (absolute pointer) + usb-kbd
+-device VGA,edid=on,xres=720,yres=1280  (portrait phone framebuffer via EDID; bochs-drm adopts it)
+-device qemu-xhci + usb-tablet (absolute pointer) + usb-kbd
 -display none -vnc 127.0.0.1:<n>,password=on                               ← per-boot password via QMP
 -chardev socket,server=off → QMP (control)     -chardev socket,server=off → serial console
 -device pvpanic  [-loadvm quickstart]
@@ -120,5 +126,8 @@ template.
 32-bpp true colour mapped directly to RGBA) keeps the framebuffer;
 `display.Streamer` coalesces damage at ≤30 fps and sends JPEG rectangles over
 the authenticated WebSocket; slow clients are resynchronized with a full frame
-instead of blocking. Pointer (absolute via usb-tablet, wheel as buttons 4/5)
-and X11 keysyms flow back. Paste uses `input text` via ADB (printable ASCII).
+instead of blocking. Clicks, drags and wheel scrolling are injected as real touches by the
+in-guest agent (`cmd/droidpector-agent`: a virtual touchscreen via
+`/dev/uinput`, fed through the sandbox network); the USB tablet only provides
+hover and is the fallback without the agent. Keys are X11 keysyms via VNC;
+paste uses `input text` via ADB (printable ASCII).

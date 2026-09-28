@@ -42,7 +42,12 @@ export function FilterHelp({ onClose }: { onClose: () => void }) {
   }, [onClose]);
   return (
     <div className="popover filter-help" role="dialog" aria-label="Filter syntax" ref={ref}>
-      <h3>Filter syntax</h3>
+      <div className="popover-head">
+        <h3>Filter syntax</h3>
+        <button className="icon-btn small" aria-label="Close" onClick={onClose}>
+          <Icon name="close" size={12} />
+        </button>
+      </div>
       <table>
         <tbody>
           {SYNTAX.map(([ex, desc]) => (
@@ -55,7 +60,7 @@ export function FilterHelp({ onClose }: { onClose: () => void }) {
           ))}
         </tbody>
       </table>
-      <p className="muted">Filters are case-insensitive. Invalid filters are highlighted and keep the current list.</p>
+      <p className="muted small">Filters are case-insensitive. Invalid filters are highlighted and keep the current list.</p>
     </div>
   );
 }
@@ -89,10 +94,10 @@ export function FilterBar({ error, total, all }: { error: string | null; total: 
     <div className="filter-bar">
       <div className="filter-row">
         <div className={`filter-input${error ? ' invalid' : ''}`}>
-          <Icon name="filter" />
+          <Icon name="search" size={13} className="filter-icon" />
           <input
             type="search"
-            placeholder="Filter (e.g. host:api.example.com method:POST status:4xx)"
+            placeholder="Filter requests — host:api.example.com method:POST status:4xx"
             aria-label="Filter requests"
             aria-invalid={!!error}
             aria-describedby={error ? errorId : undefined}
@@ -111,36 +116,36 @@ export function FilterBar({ error, total, all }: { error: string | null; total: 
           />
           {text && (
             <button className="icon-btn small" aria-label="Clear filter" title="Clear filter" onClick={() => setText('')}>
-              <Icon name="close" size={12} />
+              <Icon name="close" size={11} />
             </button>
           )}
+          <button
+            className="icon-btn small filter-help-btn"
+            aria-label="Filter syntax help"
+            title="Filter syntax"
+            aria-expanded={help}
+            onClick={() => setHelp(!help)}
+          >
+            <Icon name="help" size={13} />
+          </button>
         </div>
-        <button
-          className="icon-btn filter-help-btn"
-          aria-label="Filter syntax help"
-          title="Filter syntax"
-          aria-expanded={help}
-          onClick={() => setHelp(!help)}
-        >
-          <Icon name="help" />
-        </button>
-        <span className="net-count" aria-live="polite">
+        <div className="segmented quick-filters" role="toolbar" aria-label="Quick filters">
+          {QUICK_FILTERS.map((q) => (
+            <button key={q.id} className={`seg${quick === q.id ? ' active' : ''}`} aria-pressed={quick === q.id} onClick={() => filterStore.set({ quick: q.id })}>
+              {q.label}
+            </button>
+          ))}
+        </div>
+        <span className="net-count num" aria-live="polite">
           {total === all ? pluralize('request', all) : `${total.toLocaleString('en-US')} / ${pluralize('request', all)}`}
         </span>
         {help && <FilterHelp onClose={() => setHelp(false)} />}
       </div>
       {error && (
         <div className="filter-error" id={errorId} role="alert">
-          {error}
+          <Icon name="error" size={12} /> {error}
         </div>
       )}
-      <div className="quick-filters" role="toolbar" aria-label="Quick filters">
-        {QUICK_FILTERS.map((q) => (
-          <button key={q.id} className={`chip${quick === q.id ? ' active' : ''}`} aria-pressed={quick === q.id} onClick={() => filterStore.set({ quick: q.id })}>
-            {q.label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

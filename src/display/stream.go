@@ -39,6 +39,9 @@ type Streamer struct {
 	dirty   image.Rectangle
 	quality int
 	fps     int
+
+	touch      TouchInjector // when set, pointer events become touches
+	touchState touchState
 }
 
 // NewStreamer creates a streamer (JPEG quality 1-100, frames per second).
@@ -207,16 +210,48 @@ type Input struct {
 	Down    bool   `json:"d"`
 }
 
+// SetTouch installs (or removes, with nil) the touch injector. With one,
+// pointer events are delivered as real touches; the VNC pointer is only used
+// for hover.
+func (s *Streamer) SetTouch(t TouchInjector) {
+	s.mu.Lock()
+	old := s.touch
+	s.touch = t
+	s.mu.Unlock()
+	if old != nil {
+		s.touchState.reset(old)
+	}
+}
+
+// TouchEnabled reports whether touch injection is active.
+func (s *Streamer) TouchEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.touch != nil
+}
+
 // Send forwards an input event to the VM.
 func (s *Streamer) Send(in Input) error {
 	s.mu.Lock()
-	c := s.client
+	c, t := s.client, s.touch
 	s.mu.Unlock()
 	if c == nil {
 		return ErrNoDisplay
 	}
 	switch in.Type {
 	case "p":
+		if t != nil {
+			handled, err := s.touchState.apply(t, in)
+			if err != nil {
+				// The agent went away: fall back to the VNC pointer.
+				s.SetTouch(nil)
+				return c.Pointer(in.X, in.Y, in.Buttons)
+			}
+			if handled {
+				return nil
+			}
+			return c.Pointer(in.X, in.Y, 0) // hover only
+		}
 		return c.Pointer(in.X, in.Y, in.Buttons)
 	case "k":
 		return c.Key(in.Keysym, in.Down)

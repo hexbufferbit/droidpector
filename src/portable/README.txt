@@ -21,6 +21,18 @@ Requirements
   Start > "Turn Windows features on or off" > Windows Hypervisor Platform,
   then restart. Without it Android still runs, but slowly (software emulation).
 
+Antivirus warnings
+------------------
+droidpector.exe is not code-signed yet, and some antivirus products flag
+unsigned programs that open network sockets and start other processes (the
+sandbox does both by design). If your antivirus quarantines droidpector.exe:
+1. Restore the file from quarantine and add the droidpector folder to the
+   antivirus exclusions, or
+2. Report it as a false positive to the antivirus vendor (Microsoft:
+   https://www.microsoft.com/wdsi/filesubmission). The file's SHA-256 is in
+   CHECKSUMS.txt so you can verify it is the original build.
+Nothing in droidpector modifies Windows, the registry or other programs.
+
 First start
 -----------
 The first start boots Android completely (a few minutes). When you stop the

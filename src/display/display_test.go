@@ -7,10 +7,12 @@ import (
 	"crypto/des"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -237,5 +239,70 @@ func TestStreamerCoalescesAndResyncsSlowClients(t *testing.T) {
 	s.Attach(nil)
 	if err := s.Send(Input{Type: "k"}); !errors.Is(err, ErrNoDisplay) {
 		t.Fatal("input without display must fail clearly")
+	}
+}
+
+type fakeInjector struct {
+	log  []string
+	fail bool
+}
+
+func (f *fakeInjector) rec(s string) error {
+	f.log = append(f.log, s)
+	if f.fail {
+		return errors.New("agent gone")
+	}
+	return nil
+}
+func (f *fakeInjector) Down(x, y int) error { return f.rec(fmt.Sprintf("down %d,%d", x, y)) }
+func (f *fakeInjector) Move(x, y int) error { return f.rec(fmt.Sprintf("move %d,%d", x, y)) }
+func (f *fakeInjector) Up() error           { return f.rec("up") }
+func (f *fakeInjector) Scroll(x, y, dx, dy int) error {
+	return f.rec(fmt.Sprintf("scroll %d,%d %d,%d", x, y, dx, dy))
+}
+
+func TestStreamerTouchGestures(t *testing.T) {
+	a, b := net.Pipe()
+	srv := &fakeVNC{password: "pw"}
+	srv.serve(t, b)
+	s := NewStreamer(90, 30)
+	c, err := NewClient(context.Background(), a, "pw", s.Damage, s.Resize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s.Attach(c)
+	inj := &fakeInjector{}
+	s.SetTouch(inj)
+	if !s.TouchEnabled() {
+		t.Fatal("touch not enabled")
+	}
+	for _, in := range []Input{
+		{Type: "p", X: 1, Y: 1},             // hover → VNC pointer, no touch
+		{Type: "p", X: 1, Y: 1, Buttons: 1}, // press → down
+		{Type: "p", X: 2, Y: 1, Buttons: 1}, // drag → move
+		{Type: "p", X: 2, Y: 1},             // release → up
+		{Type: "p", X: 2, Y: 1, Buttons: 8}, // wheel up → swipe down
+		{Type: "p", X: 2, Y: 1, Buttons: 16},
+	} {
+		if err := s.Send(in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"down 1,1", "move 2,1", "up", "scroll 2,1 0,160", "scroll 2,1 0,-160"}
+	if strings.Join(inj.log, "|") != strings.Join(want, "|") {
+		t.Fatalf("gestures %v", inj.log)
+	}
+	// Detaching lifts a finger that is still down.
+	s.Send(Input{Type: "p", X: 3, Y: 3, Buttons: 1})
+	s.SetTouch(nil)
+	if inj.log[len(inj.log)-1] != "up" || s.TouchEnabled() {
+		t.Fatalf("finger not lifted on detach: %v", inj.log)
+	}
+	// A failing agent falls back to the VNC pointer transparently.
+	bad := &fakeInjector{fail: true}
+	s.SetTouch(bad)
+	if err := s.Send(Input{Type: "p", X: 3, Y: 3, Buttons: 1}); err != nil || s.TouchEnabled() {
+		t.Fatalf("fallback: err=%v enabled=%v", err, s.TouchEnabled())
 	}
 }

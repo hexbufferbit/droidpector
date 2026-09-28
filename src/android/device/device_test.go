@@ -314,3 +314,80 @@ func TestSetDefaultHome(t *testing.T) {
 		t.Fatal("single launcher must be left alone")
 	}
 }
+
+func TestFirewallScriptAndCounters(t *testing.T) {
+	s := firewallScript(FirewallRules{AllowUIDs: []int{10123, 10200}, AllowDNS: true})
+	for _, want := range []string{
+		"iptables -w -I OUTPUT 1 -j droidpector",
+		"ip6tables -w -I OUTPUT 1 -j droidpector",
+		"-o lo -j RETURN",
+		"--ctstate ESTABLISHED,RELATED -j RETURN",
+		"--dport 67:68 -j RETURN",
+		"-p udp --dport 53 -j RETURN",
+		"--uid-owner 10123 -j RETURN",
+		"--uid-owner 10200 -j RETURN",
+		"-p tcp -j REJECT --reject-with tcp-reset",
+		"--reject-with icmp6-port-unreachable",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "set -e") || !strings.Contains(s, "-D OUTPUT -j droidpector 2>/dev/null || true") || !strings.Contains(s, "-I OUTPUT 1 -j droidpector || exit 1") {
+		t.Fatal("optional steps must not abort the script; mandatory ones must")
+	}
+	// Allowed UIDs must be listed before the REJECT rules.
+	if strings.Index(s, "--uid-owner 10123") > strings.Index(s, "-p tcp -j REJECT") {
+		t.Fatal("allow rules must precede reject rules")
+	}
+	if strings.Contains(firewallScript(FirewallRules{}), "--dport 53") {
+		t.Fatal("DNS must be blockable")
+	}
+	out := `Chain droidpector (1 references)
+    pkts      bytes target     prot opt in     out     source               destination
+      12      720 RETURN     all  --  *      lo      0.0.0.0/0            0.0.0.0/0
+      37     2220 REJECT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            reject-with tcp-reset
+       5      400 REJECT     all  --  *      *       0.0.0.0/0            0.0.0.0/0            reject-with icmp-port-unreachable
+`
+	if n := parseRejectCount(out); n != 42 {
+		t.Fatalf("blocked count %d", n)
+	}
+	f := newFake(&rule{match: "id -u", stdout: "0\n"}, &rule{match: "iptables", stdout: ""}, &rule{match: "set -e", stdout: ""})
+	if err := New(f).SetAppFirewall(ctx, FirewallRules{AllowUIDs: []int{10123}, AllowDNS: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(f).ClearAppFirewall(ctx); err != nil {
+		t.Fatal(err)
+	}
+	noRoot := newFake(&rule{match: "su 0 id -u", code: 1}, &rule{match: "id -u", stdout: "2000\n"})
+	if err := New(noRoot).SetAppFirewall(ctx, FirewallRules{}); !errors.Is(err, ErrRootRequired) {
+		t.Fatalf("expected ErrRootRequired, got %v", err)
+	}
+	pk := newFake(&rule{match: "pm list packages -U", stdout: "package:com.a uid:10100\n"})
+	if uid, err := New(pk).PackageUID(ctx, "com.a"); err != nil || uid != 10100 {
+		t.Fatal(uid, err)
+	}
+	if _, err := New(pk).PackageUID(ctx, "com.missing"); !errors.Is(err, ErrNotInstalled) {
+		t.Fatal(err)
+	}
+}
+
+func TestRotation(t *testing.T) {
+	f := newFake(&rule{match: "user_rotation 1", stdout: ""}, &rule{match: "settings get system user_rotation", stdout: "1\n"})
+	d := New(f)
+	if err := d.SetRotation(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if f.ran("accelerometer_rotation 0 && settings put system user_rotation 1") != 1 {
+		t.Fatalf("cmds %q", f.cmds)
+	}
+	if n, _ := d.Rotation(ctx); n != 1 {
+		t.Fatal(n)
+	}
+	if err := d.SetRotation(ctx, 4); err == nil {
+		t.Fatal("invalid orientation accepted")
+	}
+	if n, _ := New(newFake(&rule{match: "settings get", stdout: "null\n"})).Rotation(ctx); n != 0 {
+		t.Fatal("null must read as 0")
+	}
+}

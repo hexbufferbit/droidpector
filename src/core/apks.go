@@ -192,6 +192,9 @@ func (a *APKs) Install(ctx context.Context, id string) error {
 		}
 		return s.fail(&UserError{Code: "install_failed", Title: "The APK could not be installed.", Details: err.Error()})
 	}
+	if err := s.AllowPackage(ctx, e.Info.Package); err != nil {
+		s.log.Warn("app-only firewall: could not allow the installed app", "package", e.Info.Package, "err", err)
+	}
 	a.sessions.SetAPK(ctx, e.FileName, e.Info.Package)
 	s.setApp(&AppState{Package: e.Info.Package, Label: e.Info.Label, Version: e.Info.VersionName, File: e.FileName})
 	s.update(func(st *Status) { st.State, st.Message = StateReady, "Network Capture Active" })
@@ -259,6 +262,7 @@ func (a *APKs) Uninstall(ctx context.Context, pkg string) error {
 		return err
 	}
 	s := a.sandbox
+	s.DisallowPackage(ctx, pkg)
 	s.mu.Lock()
 	if s.app != nil && s.app.Package == pkg {
 		s.app = nil

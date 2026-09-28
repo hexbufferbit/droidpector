@@ -21,6 +21,10 @@ type LaunchSpec struct {
 	GuestMAC   string
 }
 
+// TabletID is the QEMU device id of the pointer device (re-plugged after
+// installing the guest pointer configuration).
+const TabletID = "tablet0"
+
 // DataNode is the block node name of the data disk (snapshot target).
 const DataNode = "data"
 
@@ -101,15 +105,20 @@ func BuildArgs(s LaunchSpec) ([]string, error) {
 		"-device", "virtio-net-pci,netdev=net0,mac="+mac,
 	)
 	// Display + input.
+	d := p.display()
 	if p.Name == ProfileARM64 {
 		args = append(args, "-device", "ramfb")
 	} else {
-		args = append(args, "-vga", "std")
+		// Standard VGA with an EDID advertising the phone resolution: the guest's
+		// bochs-drm driver adopts it as its (only) preferred mode.
+		args = append(args, "-device", fmt.Sprintf("VGA,edid=on,xres=%d,yres=%d", d.Width, d.Height))
 	}
 	args = append(args,
-		"-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0", "-device", "usb-kbd,bus=xhci.0",
+		"-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0,id="+TabletID, "-device", "usb-kbd,bus=xhci.0",
 		"-display", "none",
-		"-vnc", fmt.Sprintf("127.0.0.1:%d,password=on", s.VNCPort-5900),
+		// QEMU picks the first free display from VNCPort upwards (several
+		// instances on one machine); the real port is read back with query-vnc.
+		"-vnc", fmt.Sprintf("127.0.0.1:%d,to=%d,password=on", s.VNCPort-5900, s.VNCPort-5900+200),
 	)
 	// Control and console channels: QEMU connects to listeners owned by the core.
 	qh, qp := hostPort(s.QMPAddr)

@@ -45,6 +45,20 @@ func TestEventURLRoundTrip(t *testing.T) {
 	if (&Event{}).URL() != "" {
 		t.Fatal("URL of host-less event must be empty")
 	}
+	for _, c := range []struct {
+		e    Event
+		want string
+	}{
+		{Event{Kind: KindTCP, Host: "149.154.167.51", Port: 443}, "tcp://149.154.167.51:443"},
+		{Event{Kind: KindTLS, Scheme: "https", Host: "pinned.example", Port: 443}, "https://pinned.example"},
+		{Event{Kind: KindTLS, Host: "1.2.3.4", Port: 8443}, "tls://1.2.3.4:8443"},
+		{Event{Kind: KindUDP, Host: "time.android.com", Port: 123}, "udp://time.android.com:123"},
+		{Event{Kind: KindDNS, Host: "api.example.com"}, "dns://api.example.com"},
+	} {
+		if got := c.e.URL(); got != c.want {
+			t.Errorf("%s URL() = %q, want %q", c.e.Kind, got, c.want)
+		}
+	}
 }
 
 func TestParseQueryPreservesOrderAndDuplicates(t *testing.T) {

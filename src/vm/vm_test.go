@@ -41,10 +41,10 @@ func TestBuildArgs(t *testing.T) {
 		"-append root=/dev/ram0 console=ttyS0",
 		`filename=C:\Users\x,,y\data.qcow2`, // commas escaped for QEMU option syntax
 		"node-name=data,", "-netdev socket,id=net0,connect=127.0.0.1:4003", "virtio-net-pci,netdev=net0",
-		"-vnc 127.0.0.1:11,password=on", "-display none",
+		"-vnc 127.0.0.1:11,to=211,password=on", "-display none", "-device VGA,edid=on,xres=720,yres=1280",
 		"-chardev socket,id=qmp,host=127.0.0.1,port=4001,server=off", "-mon chardev=qmp,mode=control",
 		"-chardev socket,id=con,host=127.0.0.1,port=4002,server=off,logfile=/logs/serial.log,logappend=on",
-		"-serial chardev:con", "-loadvm boot", "usb-tablet", "read-only=on",
+		"-serial chardev:con", "-loadvm boot", "usb-tablet,bus=xhci.0,id=tablet0", "read-only=on",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("args lack %q\n%s", want, s)
@@ -53,6 +53,11 @@ func TestBuildArgs(t *testing.T) {
 	// Exactly one NIC, and no user-mode (slirp) networking that would bypass the gateway.
 	if strings.Count(s, "-netdev") != 1 || strings.Contains(s, "user,") || strings.Contains(s, "hostfwd") {
 		t.Fatalf("unexpected networking: %s", s)
+	}
+	spec.Profile.Display = Display{Width: 1080, Height: 1920}
+	args, _ = BuildArgs(spec)
+	if !strings.Contains(joined(args), "xres=1080,yres=1920") {
+		t.Error("custom display geometry not applied")
 	}
 	spec.Accel = "tcg"
 	args, _ = BuildArgs(spec)
@@ -219,6 +224,8 @@ func fakeQEMU(t *testing.T, conn net.Conn) {
 				reply(`{}`)
 			case "query-jobs":
 				reply(fmt.Sprintf(`[{"id": "x", "status": "running"}, {"id": %q, "status": "concluded"}]`, "keep"))
+			case "query-vnc":
+				reply(`{"enabled": true, "host": "127.0.0.1", "service": "5912", "family": "ipv4"}`)
 			case "human-monitor-command":
 				reply(`"There is no snapshot available.\r\n"`)
 			case "boom":

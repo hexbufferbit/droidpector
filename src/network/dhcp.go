@@ -131,7 +131,6 @@ func dhcpReply(req *dhcpPacket, msgType byte, a Addressing, lease time.Duration)
 			bc[i] |= ^mask[i]
 		}
 		opt(optBroadcast, bc[:])
-		opt(optDomainName, []byte("sandbox.internal"))
 	}
 	return append(b, optEnd)
 }

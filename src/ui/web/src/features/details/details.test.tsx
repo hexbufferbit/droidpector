@@ -199,6 +199,14 @@ describe('BodyViewer', () => {
     expect(container.querySelector('.m-tag')).toBeTruthy();
   });
 
+  it('shows raw TCP stream prefixes as hex with a note', async () => {
+    const load = vi.fn(async () => body(new Uint8Array([0xef, 0xee, 0xee, 0xee, 0x01]), 'binary'));
+    render(<BodyViewer eventId="e1" part="request" bodyRef={{ hash: 'h', size: 4096, stored: 5 }} rawStream load={load} />);
+    expect(await screen.findByLabelText('Hex dump')).toBeTruthy();
+    expect(screen.getByRole('note').textContent).toMatch(/Raw TCP stream \(sent by the app, first 5 B of 4,096 B\)/);
+    expect(screen.getByText('STREAM · 5 B')).toBeTruthy();
+  });
+
   it('opens large JSON bodies in raw mode', () => {
     expect(defaultMode('json', LARGE_BODY + 1)).toBe('raw');
     expect(defaultMode('json', 100)).toBe('tree');

@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Icon } from '../../components/Icon';
-import { actions, appStore } from '../../state/app';
+import { actions } from '../../state/app';
 import { dragHasFiles, firstApk, pickApk } from './files';
 
-/** DropZone is the empty state of the Android pane: drop an APK or choose a file. */
-export function DropZone({ canShowAndroid }: { canShowAndroid: boolean }) {
+/** DropZone is the empty state shown inside the phone screen: drop an APK or choose a file. */
+export function DropZone() {
   const [over, setOver] = useState(false);
   return (
     <div
@@ -25,18 +25,12 @@ export function DropZone({ canShowAndroid }: { canShowAndroid: boolean }) {
         if (f) void actions.uploadApk(f);
       }}
     >
-      <Icon name="android" size={48} />
-      <p className="drop-title">Drop an APK here or choose a file</p>
-      <p className="muted">The app is installed in an isolated Android sandbox and its network traffic appears on the right.</p>
-      <button className="btn primary" onClick={() => pickApk((f) => void actions.uploadApk(f))}>
+      <img className="drop-logo" src="./logo.png" alt="" width={96} height={96} draggable={false} />
+      <p className="drop-title">Drop an APK here</p>
+      <p className="drop-sub">It is installed in an isolated Android sandbox and every request it makes shows up on the right.</p>
+      <button className="btn primary pill" onClick={() => pickApk((f) => void actions.uploadApk(f))}>
         <Icon name="upload" /> Choose APK file…
       </button>
-      {canShowAndroid && (
-        <button className="link-btn" onClick={() => appStore.set({ hideDropZone: true })}>
-          Show the Android screen instead
-        </button>
-      )}
     </div>
   );
 }
-

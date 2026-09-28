@@ -17,6 +17,7 @@ No CGO is required: the Windows executable is cross-compiled from any OS
 
 ```bash
 make ui             # src/ui/web → dist (embedded via go:embed)
+make agent          # in-guest touch agent (static linux/amd64, embedded via go:embed)
 make windows        # Release: build/droidpector.exe  (-trimpath -s -w, GUI subsystem)
 make windows-debug  # Debug:   build/debug/droidpector.exe (no optimizations, console output)
 make runtime        # build/runtime: pinned QEMU for Windows + Android runtime + licenses

@@ -249,6 +249,35 @@ func TestAPINetworkInspectorFlow(t *testing.T) {
 	}
 }
 
+func TestAPIAppOnlyToggle(t *testing.T) {
+	e := newAPIEnv(t)
+	status := func() core.Status {
+		_, b := e.do("GET", "/api/status", nil, nil)
+		var st core.Status
+		json.Unmarshal(b, &st)
+		return st
+	}
+	if !status().AppOnly {
+		t.Fatal("app-only must be on by default")
+	}
+	r, _ := e.do("POST", "/api/sandbox/app-only", strings.NewReader(`{"enabled":false}`), map[string]string{"Content-Type": "application/json"})
+	if r.StatusCode != 204 || status().AppOnly {
+		t.Fatalf("disable: %d appOnly=%v", r.StatusCode, status().AppOnly)
+	}
+	r, _ = e.do("POST", "/api/sandbox/app-only", strings.NewReader(`{"enabled":true}`), map[string]string{"Content-Type": "application/json"})
+	if r.StatusCode != 204 || !status().AppOnly {
+		t.Fatal("enable")
+	}
+	// Rotation needs a running device: a clear 409, and bad values are 400.
+	r, b := e.do("POST", "/api/display/rotate", strings.NewReader(`{"orientation":1}`), map[string]string{"Content-Type": "application/json"})
+	if r.StatusCode != 409 || !strings.Contains(string(b), "not running") {
+		t.Fatalf("rotate without VM: %d %s", r.StatusCode, b)
+	}
+	if r, _ := e.do("POST", "/api/display/rotate", strings.NewReader(`{"orientation":7}`), map[string]string{"Content-Type": "application/json"}); r.StatusCode != 400 {
+		t.Fatalf("bad orientation: %d", r.StatusCode)
+	}
+}
+
 func TestAPIWebSocketPushesChanges(t *testing.T) {
 	e := newAPIEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

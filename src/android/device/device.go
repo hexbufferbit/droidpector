@@ -277,3 +277,18 @@ func (d *Device) Run(ctx context.Context, cmd string) (string, int, error) {
 	}
 	return r.combined(), r.code, nil
 }
+
+// Push uploads size bytes from r to remotePath with the given mode.
+func (d *Device) Push(ctx context.Context, r io.Reader, size int64, remotePath string, mode fs.FileMode, mtime time.Time) error {
+	if err := checkRemotePath(remotePath); err != nil {
+		return err
+	}
+	return d.sh.Push(ctx, r, size, remotePath, mode, mtime)
+}
+
+func checkRemotePath(p string) error {
+	if !strings.HasPrefix(p, "/") || strings.Contains(p, "..") || strings.ContainsAny(p, " '\"`$;&|") {
+		return fmt.Errorf("invalid remote path %q", p)
+	}
+	return nil
+}

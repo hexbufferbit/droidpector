@@ -38,8 +38,8 @@ jobs:
       - name: Build UI
         working-directory: src/ui/web
         run: npm ci && npm run build
-      - name: Build
-        run: go build ./...
+      - name: Build (agent + all packages)
+        run: make agent && go build ./...
       - name: Unit + integration tests (race)
         run: go test -race -count=1 ./...
       - name: UI unit tests
@@ -122,6 +122,8 @@ jobs:
         shell: bash
         run: |
           make ui
+          make agent
+          make portable
           make installer MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
           make windows-debug
       - name: Smoke-test the installer (silent install / run / uninstall)
@@ -132,6 +134,7 @@ jobs:
           name: windows-x64
           path: |
             build/droidpector.exe
+            build/droidpector-portable-x64.zip
             build/droidpector-Setup-x64.exe
             build/debug/droidpector.exe
 

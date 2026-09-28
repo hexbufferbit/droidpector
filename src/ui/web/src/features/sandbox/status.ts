@@ -1,24 +1,24 @@
 import type { SandboxState, Status } from '../../api/types';
 
 const DEFAULT_LABELS: Record<SandboxState, string> = {
-  stopped: 'Sandbox Stopped',
-  preparing: 'Preparing Sandbox...',
-  starting: 'Starting Android...',
-  booting: 'Starting Android...',
-  provisioning: 'Preparing Android...',
-  ready: 'Sandbox Ready',
-  installing: 'Installing APK...',
-  launching: 'Launching...',
-  stopping: 'Stopping Sandbox...',
-  recovering: 'Recovering Sandbox...',
-  error: 'Sandbox Error',
+  stopped: 'Sandbox stopped',
+  preparing: 'Preparing sandbox…',
+  starting: 'Starting Android…',
+  booting: 'Starting Android…',
+  provisioning: 'Preparing Android…',
+  ready: 'Sandbox ready',
+  installing: 'Installing APK…',
+  launching: 'Launching app…',
+  stopping: 'Stopping sandbox…',
+  recovering: 'Recovering sandbox…',
+  error: 'Sandbox error',
 };
 
 export type StatusTone = 'idle' | 'busy' | 'ok' | 'capture' | 'error';
 
 export function statusLabel(st: Status | null): string {
-  if (!st) return 'Connecting...';
-  if (st.state === 'ready' && st.captureActive && !st.message) return 'Network Capture Active';
+  if (!st) return 'Connecting…';
+  if (st.state === 'ready' && st.captureActive && !st.message) return 'Capturing traffic';
   return st.message || DEFAULT_LABELS[st.state] || st.state;
 }
 

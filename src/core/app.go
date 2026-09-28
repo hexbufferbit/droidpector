@@ -121,7 +121,7 @@ func NewApp(version string, paths platform.Paths, cfg platform.Config, logs *pla
 	a.Sandbox = NewSandbox(SandboxConfig{
 		Profiles: a.Profiles, SandboxDir: paths.SandboxDir, LogDir: paths.LogDir,
 		MemoryMB: cfg.MemoryMB, CPUs: cfg.CPUs, Accel: cfg.Accelerator, BootTimeout: time.Duration(cfg.BootTimeoutSec) * time.Second,
-		AutoRestart: cfg.AutoRestart, UseBootSnapshot: cfg.UseBootSnapshot, InspectHTTPS: cfg.InspectHTTPS, ADBKey: key,
+		AutoRestart: cfg.AutoRestart, UseBootSnapshot: cfg.UseBootSnapshot, InspectHTTPS: cfg.InspectHTTPS, AppOnly: cfg.AppOnly, ADBKey: key,
 	}, logs.App, logs.VM, a.procs, a.Gateway, a.Sessions, a.Recorder, a.Streamer, a.Hub.StatusChanged)
 	sandboxRef = a.Sandbox
 	a.APKs = NewAPKs(filepath.Join(paths.TempDir, "apks"), a.Sandbox, a.Sessions)

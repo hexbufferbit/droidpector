@@ -57,8 +57,8 @@ rm -rf "$A" "$W" && mkdir -p "$A" "$W/iso"
 fsck.erofs --extract="$W/efs" "$W/system.efs" >/dev/null
 ORIG_SHA="$(sha256 "$W/efs/system.img")"
 export SOURCE_DATE_EPOCH=1728604800   # BlissOS 16.9.7 release date: reproducible output
-mksquashfs "$W/efs/system.img" "$W/iso/system.sfs" -comp xz -b 1M -Xdict-size 100% \
-  -noappend -no-progress -quiet -mkfs-time "$SOURCE_DATE_EPOCH" -all-time "$SOURCE_DATE_EPOCH"
+# (SOURCE_DATE_EPOCH alone sets every timestamp; mksquashfs refuses it combined with -mkfs-time.)
+mksquashfs "$W/efs/system.img" "$W/iso/system.sfs" -comp xz -b 1M -Xdict-size 100% -noappend -no-progress -quiet
 REPACK_SHA="$(unsquashfs -cat "$W/iso/system.sfs" system.img | { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1)"
 if [ "$ORIG_SHA" != "$REPACK_SHA" ]; then
   echo "repacked system image differs from the original ($ORIG_SHA vs $REPACK_SHA)" >&2

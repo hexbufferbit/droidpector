@@ -9,12 +9,27 @@
   "initrd": "initrd.img",
   "iso": "system.iso",
   "dataTemplate": "data-template.qcow2",
-  "cmdline": "root=/dev/ram0 SRC= DATA=vda ROOT=/dev/sr0 nomodeset HWACCEL=0 console=ttyS0 quiet androidboot.enable_console=1 androidboot.selinux=permissive SETUPWIZARD=0",
-  "abis": ["x86_64", "x86", "arm64-v8a", "armeabi-v7a", "armeabi"],
+  "cmdline": "root=/dev/ram0 SRC= DATA=vda ROOT=/dev/sr0 HWACCEL=0 console=ttyS0 quiet androidboot.enable_console=1 androidboot.selinux=permissive SETUPWIZARD=0 DPI=320",
+  "abis": [
+    "x86_64",
+    "x86",
+    "arm64-v8a",
+    "armeabi-v7a",
+    "armeabi"
+  ],
   "translation": true,
-  "accels": ["whpx", "kvm", "hvf"],
+  "accels": [
+    "whpx",
+    "kvm",
+    "hvf"
+  ],
   "sha256": {
     "system.iso": "@SYSTEM_ISO_SHA256@",
     "system.img": "@SYSTEM_IMG_SHA256@"
+  },
+  "display": {
+    "width": 720,
+    "height": 1280,
+    "density": 320
   }
 }

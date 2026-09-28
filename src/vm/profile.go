@@ -34,11 +34,38 @@ type Profile struct {
 	ABIs         []string          `json:"abis"`             // ro.product.cpu.abilist
 	Translation  bool              `json:"translation"`      // has an ARM native-bridge translator
 	Accels       []string          `json:"accels"`           // preferred accelerators in order (tcg is always the fallback)
+	Display      Display           `json:"display"`          // guest screen geometry (portrait phone by default)
 	SHA256       map[string]string `json:"sha256,omitempty"` // integrity of the image files
 
 	Dir     string `json:"-"` // resolved profile directory
 	QEMUDir string `json:"-"` // resolved QEMU directory
 }
+
+// Display is the guest screen: the emulated display advertises this as its
+// preferred (EDID) mode, so Android boots with a phone-shaped framebuffer.
+type Display struct {
+	Width   int `json:"width"`
+	Height  int `json:"height"`
+	Density int `json:"density"` // Android dpi (320 = xhdpi phone)
+}
+
+// DefaultDisplay is used when a profile does not specify a display.
+var DefaultDisplay = Display{Width: 720, Height: 1280, Density: 320}
+
+// display returns the effective display geometry.
+func (p Profile) display() Display {
+	d := p.Display
+	if d.Width <= 0 || d.Height <= 0 {
+		d.Width, d.Height = DefaultDisplay.Width, DefaultDisplay.Height
+	}
+	if d.Density <= 0 {
+		d.Density = DefaultDisplay.Density
+	}
+	return d
+}
+
+// EffectiveDisplay is the exported accessor used by provisioning.
+func (p Profile) EffectiveDisplay() Display { return p.display() }
 
 // Path returns an absolute path to a profile file.
 func (p Profile) Path(name string) string { return filepath.Join(p.Dir, name) }

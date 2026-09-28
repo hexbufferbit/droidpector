@@ -605,6 +605,13 @@ func TestRawTCPIsRelayedAndRecorded(t *testing.T) {
 	if ev.Host != rawHost || ev.RequestSize != 5 || ev.ResponseSize != int64(len("RAW-READY\nECHO ping\n")) {
 		t.Fatalf("raw event: %+v", ev)
 	}
+	// The stream prefix is kept so opaque protocols can still be inspected.
+	if string(e.body(ev.RequestBody)) != "ping\n" || string(e.body(ev.ResponseBody)) != "RAW-READY\nECHO ping\n" {
+		t.Fatalf("stream capture: %q / %q", e.body(ev.RequestBody), e.body(ev.ResponseBody))
+	}
+	if ev.Protocol != "TCP" || ev.URL() != "tcp://"+rawHost+":7000" {
+		t.Fatalf("protocol/url: %s %s", ev.Protocol, ev.URL())
+	}
 }
 
 func TestReplayCreatesNewEvent(t *testing.T) {

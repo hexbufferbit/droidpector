@@ -1,10 +1,23 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { api, wsUrl } from '../../api/client';
 import { ReconnectingSocket } from '../../api/ws';
 import { readClipboardText } from '../../lib/clipboard';
 import { keysymFromEvent } from '../../lib/keysym';
-import { showError, toast } from '../../state/app';
-import { BUTTON, buttonMask, fitSize, keyMessage, parseDisplayMessage, pointerMessage, toFramebuffer } from './protocol';
+import { actions, showError, toast } from '../../state/app';
+import { useStore } from '../../state/store';
+import { displayStore, zoomActions } from './displayState';
+import {
+  BUTTON,
+  buttonMask,
+  canvasRotation,
+  clampZoom,
+  frameLayout,
+  keyMessage,
+  parseDisplayMessage,
+  pointerMessage,
+  toFramebufferOriented,
+  type Orientation,
+} from './protocol';
 
 export interface DisplayHandle {
   /** tap sends a key press + release. */
@@ -12,6 +25,11 @@ export interface DisplayHandle {
   paste(): Promise<void>;
   focus(): void;
 }
+
+/** Bezel width of the device frame in CSS pixels (kept in sync with .phone-frame padding). */
+export const BEZEL = 10;
+/** Padding of the scrolling stage around the frame (kept in sync with .phone-stage padding). */
+export const STAGE_PAD = 12;
 
 export async function pasteFromClipboard(): Promise<void> {
   let text: string;
@@ -33,22 +51,46 @@ export async function pasteFromClipboard(): Promise<void> {
   }
 }
 
-/** DisplayCanvas streams the Android screen and forwards pointer/keyboard input. */
-export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Ref<DisplayHandle> }) {
+export interface DisplayCanvasProps {
+  active: boolean;
+  /** display orientation reported by the core (quarter turns clockwise) */
+  orientation: Orientation;
+  ref?: React.Ref<DisplayHandle>;
+  /** content shown inside the phone screen while there is no picture (boot spinner, drop zone…) */
+  overlay?: ReactNode;
+}
+
+/**
+ * DisplayCanvas streams the Android screen inside a phone-shaped device frame and forwards
+ * pointer/keyboard input. The frame keeps the framebuffer's aspect ratio, follows the zoom
+ * (fit / fixed scale, Ctrl+wheel, corner grip) and counter-rotates the picture for the current
+ * orientation; pointer coordinates are mapped back through the inverse transform.
+ */
+export function DisplayCanvas({ active, orientation, ref, overlay }: DisplayCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const sock = useRef<ReconnectingSocket | null>(null);
+  const zoom = useStore(displayStore, (s) => s.zoom);
   const [fb, setFb] = useState({ w: 0, h: 0 });
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [connected, setConnected] = useState(false);
   const fbRef = useRef(fb);
   fbRef.current = fb;
+  const orientationRef = useRef(orientation);
+  orientationRef.current = orientation;
   const mask = useRef(0);
   const down = useRef(new Set<number>());
+  /** point (fraction of the frame + client position) to keep under the cursor after a zoom step */
+  const anchor = useRef<{ fx: number; fy: number; cx: number; cy: number } | null>(null);
 
   // Stream: decode JPEG rects in parallel but draw them in arrival order.
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      setFb({ w: 0, h: 0 });
+      return;
+    }
     let queue: Promise<void> = Promise.resolve();
     const s = new ReconnectingSocket({
       url: () => wsUrl('/api/display'),
@@ -86,10 +128,11 @@ export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Re
     };
   }, [active]);
 
+  // Available space (the stage's content box).
   useLayoutEffect(() => {
-    const el = boxRef.current;
+    const el = stageRef.current;
     if (!el) return;
-    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    const measure = () => setBox({ w: el.clientWidth - 2 * STAGE_PAD, h: el.clientHeight - 2 * STAGE_PAD });
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
@@ -97,12 +140,46 @@ export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Re
     return () => ro.disconnect();
   }, []);
 
+  const layout = frameLayout(fb.w, fb.h, orientation, box.w, box.h, BEZEL, zoom);
+
+  // Publish the shown scale (the toolbar steps from it) and keep the zoom anchor under the cursor.
+  useLayoutEffect(() => {
+    displayStore.set({ effectiveScale: layout.scale });
+    const a = anchor.current;
+    const stage = stageRef.current;
+    const frame = frameRef.current;
+    if (a && stage && frame) {
+      anchor.current = null;
+      const sr = stage.getBoundingClientRect();
+      stage.scrollLeft = frame.offsetLeft + a.fx * frame.offsetWidth - (a.cx - sr.left);
+      stage.scrollTop = frame.offsetTop + a.fy * frame.offsetHeight - (a.cy - sr.top);
+    }
+  }, [layout.scale, layout.frame.width, layout.frame.height]);
+
+  // Ctrl+wheel (and trackpad pinch) zooms the phone; plain wheel scrolls the stage or Android.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const frame = frameRef.current;
+      if (frame) {
+        const r = frame.getBoundingClientRect();
+        anchor.current = { fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, cx: e.clientX, cy: e.clientY };
+      }
+      zoomActions.step(e.deltaY < 0 ? 1 : -1);
+    };
+    stage.addEventListener('wheel', onWheel, { passive: false });
+    return () => stage.removeEventListener('wheel', onWheel);
+  }, []);
+
   const send = (msg: string) => sock.current?.send(msg);
 
   const pos = (e: { clientX: number; clientY: number }) => {
-    const c = canvasRef.current;
-    if (!c) return { x: 0, y: 0 };
-    return toFramebuffer(e.clientX, e.clientY, c.getBoundingClientRect(), fbRef.current.w, fbRef.current.h);
+    const s = screenRef.current;
+    if (!s) return { x: 0, y: 0 };
+    return toFramebufferOriented(e.clientX, e.clientY, s.getBoundingClientRect(), fbRef.current.w, fbRef.current.h, orientationRef.current);
   };
 
   const tapKey = (k: number) => {
@@ -130,6 +207,7 @@ export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Re
   };
 
   const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (e.ctrlKey || e.metaKey) return; // zoom, handled on the stage
     if (!fbRef.current.w || e.deltaY === 0) return;
     const p = pos(e);
     const bit = e.deltaY < 0 ? BUTTON.wheelUp : BUTTON.wheelDown;
@@ -137,7 +215,7 @@ export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Re
     send(pointerMessage(p.x, p.y, mask.current));
   };
 
-  // Native non-passive wheel listener so the page does not scroll.
+  // Native non-passive wheel listener so wheel over Android never scrolls the stage.
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
@@ -148,10 +226,18 @@ export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Re
 
   const onKey = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
     const isDown = e.type === 'keydown';
-    if (isDown && (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'v') {
-      e.preventDefault();
-      void pasteFromClipboard();
-      return;
+    if (isDown && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      const key = e.key.toLowerCase();
+      if (key === 'v') {
+        e.preventDefault();
+        void pasteFromClipboard();
+        return;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        void actions.rotate(orientationRef.current + (e.key === 'ArrowRight' ? 1 : -1));
+        return;
+      }
     }
     const k = keysymFromEvent(e);
     if (k === null) return;
@@ -169,26 +255,73 @@ export function DisplayCanvas({ active, ref }: { active: boolean; ref?: React.Re
     mask.current = 0;
   };
 
-  const size = fitSize(fb.w, fb.h, box.w, box.h);
+  // Corner grip: dragging resizes the phone (switches to a fixed scale).
+  const onGripDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startScale = layout.scale || 1;
+    const startW = layout.screen.width || 1;
+    const startH = layout.screen.height || 1;
+    const sx = e.clientX;
+    const sy = e.clientY;
+    document.body.classList.add('resizing-phone');
+    const move = (ev: PointerEvent) => {
+      const ratio = Math.max((startW + ev.clientX - sx) / startW, (startH + ev.clientY - sy) / startH);
+      zoomActions.set(clampZoom(startScale * ratio));
+    };
+    const up = () => {
+      document.body.classList.remove('resizing-phone');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const live = active && fb.w > 0;
+  const landscape = orientation % 2 === 1;
+  const rotation = canvasRotation(orientation);
   return (
-    <div className="display-box" ref={boxRef}>
-      <canvas
-        ref={canvasRef}
-        className="display-canvas"
-        tabIndex={0}
-        role="img"
-        aria-label="Android screen. Focus it to type into Android; Ctrl+V pastes text."
-        style={{ width: size.width || undefined, height: size.height || undefined, visibility: fb.w ? 'visible' : 'hidden' }}
-        onPointerDown={onPointer}
-        onPointerMove={onPointer}
-        onPointerUp={onPointer}
-        onWheel={onWheel}
-        onContextMenu={(e) => e.preventDefault()}
-        onKeyDown={onKey}
-        onKeyUp={onKey}
-        onBlur={onBlur}
-      />
-      {active && !connected && fb.w > 0 && <div className="display-reconnecting">Reconnecting to the display…</div>}
+    <div className={`phone-stage${layout.overflow ? ' overflow' : ''}`} ref={stageRef}>
+      <div
+        ref={frameRef}
+        className={`phone-frame${live ? ' live' : ''}${landscape ? ' landscape' : ''}`}
+        style={layout.frame.width ? { width: layout.frame.width, height: layout.frame.height } : { visibility: 'hidden' }}
+        data-testid="phone-frame"
+        data-orientation={orientation}
+        data-scale={layout.scale ? layout.scale.toFixed(3) : undefined}
+      >
+        <div className="phone-screen" ref={screenRef} style={{ width: layout.screen.width || undefined, height: layout.screen.height || undefined }}>
+          <canvas
+            ref={canvasRef}
+            className="display-canvas"
+            tabIndex={live ? 0 : -1}
+            role="img"
+            aria-label="Android screen. Focus it to type into Android; Ctrl+V pastes text, Ctrl+wheel zooms, Ctrl+arrows rotate."
+            style={{
+              width: layout.canvas.width || undefined,
+              height: layout.canvas.height || undefined,
+              transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+              visibility: live ? 'visible' : 'hidden',
+            }}
+            onPointerDown={onPointer}
+            onPointerMove={onPointer}
+            onPointerUp={onPointer}
+            onWheel={onWheel}
+            onContextMenu={(e) => e.preventDefault()}
+            onKeyDown={onKey}
+            onKeyUp={onKey}
+            onBlur={onBlur}
+          />
+          {!live && overlay ? <div className="screen-overlay">{overlay}</div> : null}
+          {active && !connected && fb.w > 0 && (
+            <div className="display-reconnecting" role="status">
+              <span className="spinner" aria-hidden="true" /> Reconnecting to the display…
+            </div>
+          )}
+        </div>
+        <div className="phone-grip" role="presentation" title="Drag to resize" onPointerDown={onGripDown} />
+      </div>
     </div>
   );
 }

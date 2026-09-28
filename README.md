@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/droidpector-logo.png" width="180" alt="droidpector logo"></p>
+
 # droidpector
 
 A Windows x64 desktop application that runs an Android APK inside an isolated
@@ -20,8 +22,9 @@ the application manages all of them.
 - **APK manager** — drag & drop or file picker, validation (signature, ABIs,
   SDK levels), automatic runtime selection by CPU architecture, install,
   launch, stop, clear data, uninstall, reinstall, meaningful install errors.
-- **Embedded Android display** — mouse, touch-like drag, keyboard, scroll,
-  paste, scaled to the window.
+- **Embedded phone display** — portrait phone frame, zoom (Ctrl+wheel, Fit,
+  1:1), rotation, real touch input through an in-guest agent (taps, drags,
+  scroll gestures work in every orientation), keyboard, paste.
 - **Network isolation by construction** — the VM's only NIC is a user-mode
   TCP/IP stack inside the app. Windows traffic never enters the capture
   pipeline; no system proxy, driver or TAP adapter is used.

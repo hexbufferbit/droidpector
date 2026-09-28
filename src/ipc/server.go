@@ -100,6 +100,19 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/sandbox/start", s.sandboxStart)
 	api("POST /api/sandbox/stop", s.async(func(ctx context.Context, _ *http.Request) error { return s.app.Sandbox.Stop(ctx) }))
 	api("POST /api/sandbox/restart", s.async(func(ctx context.Context, _ *http.Request) error { return s.app.Sandbox.Restart(ctx) }))
+	api("POST /api/sandbox/app-only", func(w http.ResponseWriter, r *http.Request) error {
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		s.app.Sandbox.SetAppOnly(ctx, req.Enabled)
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
 	api("POST /api/sandbox/reset", s.async(func(ctx context.Context, _ *http.Request) error { return s.app.Sandbox.Reset(ctx) }))
 
 	api("GET /api/snapshots", func(w http.ResponseWriter, r *http.Request) error {
@@ -140,6 +153,24 @@ func (s *Server) routes() http.Handler {
 	api("POST /api/apps/{pkg}/clear", s.sync(func(ctx context.Context, r *http.Request) error { return s.app.APKs.ClearData(ctx, r.PathValue("pkg")) }))
 	api("POST /api/apps/{pkg}/uninstall", s.sync(func(ctx context.Context, r *http.Request) error { return s.app.APKs.Uninstall(ctx, r.PathValue("pkg")) }))
 	api("POST /api/display/paste", s.paste)
+	api("POST /api/display/rotate", func(w http.ResponseWriter, r *http.Request) error {
+		var req struct {
+			Orientation int `json:"orientation"`
+		}
+		if err := readJSON(r, &req); err != nil {
+			return err
+		}
+		if req.Orientation < 0 || req.Orientation > 3 {
+			return &core.UserError{Code: "bad_request", Title: "Orientation must be 0, 1, 2 or 3 (quarter turns)."}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if err := s.app.Sandbox.Rotate(ctx, req.Orientation); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
 
 	api("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) error {
 		list, err := s.app.Sessions.List(r.Context())

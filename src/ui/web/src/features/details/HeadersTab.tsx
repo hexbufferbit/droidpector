@@ -3,6 +3,7 @@ import type { EventDetail, Header } from '../../api/types';
 import { Icon } from '../../components/Icon';
 import { copyText } from '../../lib/clipboard';
 import { toast } from '../../state/app';
+import { CodeView } from './body/CodeView';
 
 export function sortHeaders(h: Header[] | undefined): Header[] {
   return [...(h ?? [])].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
@@ -20,10 +21,15 @@ function Section({ title, headers, firstLine, raw }: { title: string; headers?: 
     <section className="headers-section" aria-label={title}>
       <div className="section-head">
         <button className="link-btn section-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} /> {title} <span className="muted">({list.length})</span>
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} /> {title} <span className="count-pill">{list.length}</span>
         </button>
+        {!raw && (
+          <span className="section-first-line mono muted" title={firstLine}>
+            {firstLine}
+          </span>
+        )}
         <button
-          className="btn small"
+          className="btn small ghost"
           onClick={() => void copyText(headersText(headers, firstLine)).then(() => toast(`Copied ${title.toLowerCase()}`))}
           title={`Copy ${title.toLowerCase()}`}
         >
@@ -34,9 +40,9 @@ function Section({ title, headers, firstLine, raw }: { title: string; headers?: 
         (list.length === 0 ? (
           <p className="muted pad">No headers</p>
         ) : raw ? (
-          <pre className="code-view mono wrap">{headersText(headers, firstLine)}</pre>
+          <CodeView text={headersText(headers, firstLine)} wrap />
         ) : (
-          <table className="kv-table">
+          <table className="kv-table headers-table">
             <tbody>
               {list.map((h, i) => (
                 <tr key={`${h.name}-${i}`}>

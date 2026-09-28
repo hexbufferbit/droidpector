@@ -210,7 +210,7 @@ func TestToErrorInfo(t *testing.T) {
 
 func testSandbox(t *testing.T, f *fixture) *Sandbox {
 	procs, _ := platform.NewProcessGroup()
-	return NewSandbox(SandboxConfig{Profiles: map[string]vm.Profile{vm.ProfileX86_64: {Name: vm.ProfileX86_64, Translation: true}}},
+	return NewSandbox(SandboxConfig{Profiles: map[string]vm.Profile{vm.ProfileX86_64: {Name: vm.ProfileX86_64, Translation: true}}, AppOnly: true},
 		quietLog(), quietLog(), procs, nil, f.sessions, f.rec, nil, nil)
 }
 
@@ -263,4 +263,24 @@ func TestSandboxRefusesOperationsWhenStopped(t *testing.T) {
 	if err := s.Start(context.Background(), "arm64"); err == nil || s.Status().Error == nil || s.Status().Error.Code != "runtime_missing" {
 		t.Fatalf("missing runtime must produce a clear error: %v %+v", err, s.Status().Error)
 	}
+}
+
+func TestAppOnlyToggleWithoutVM(t *testing.T) {
+	f := newFixture(t)
+	s := testSandbox(t, f)
+	if !s.Status().AppOnly {
+		t.Fatal("app-only should default to the configured value")
+	}
+	s.SetAppOnly(context.Background(), false)
+	if s.Status().AppOnly {
+		t.Fatal("toggle off not reflected in status")
+	}
+	s.SetAppOnly(context.Background(), true)
+	if !s.Status().AppOnly {
+		t.Fatal("toggle on not reflected in status")
+	}
+	if err := s.AllowPackage(context.Background(), "com.x"); err == nil {
+		t.Fatal("allowing a package without a running device must fail clearly")
+	}
+	s.DisallowPackage(context.Background(), "com.x") // no-op when unknown
 }

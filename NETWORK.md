@@ -38,6 +38,31 @@ line is unit-tested to contain exactly one `-netdev`, and never `user`/`hostfwd`
 10.0.2.15:5555 (`Stack.DialGuest`), so it never passes the forwarder and is
 never captured or exposed on a host port.
 
+## App-only firewall (sandbox → Internet)
+
+By default only the app under test may reach the network. This is enforced
+*inside* the guest with iptables owner matching (the mechanism Android's own
+per-app data restrictions use): a `droidpector` chain is inserted first in
+OUTPUT and returns for loopback, DHCP, DNS, replies to host-initiated (ADB)
+connections and the allowed apps' UIDs, then rejects everything else with a
+TCP reset. Blocked system traffic (connectivity checks, time sync, OS updater,
+app-link verification…) never reaches the gateway, so it neither appears in
+the list nor leaks. Captive-portal probing is disabled so Android does not
+mark the network as limited. The app is allowed when it is installed
+(`Sandbox.AllowPackage`); the switch is `POST /api/sandbox/app-only` and the
+rejected-packet counter is `Status.blockedFlows`. DNS cannot be attributed
+per app (Android resolves from a system process), so DNS queries of blocked
+apps still show as DNS events.
+
+## Raw (non-HTTP) streams
+
+Connections that are neither HTTP nor TLS are relayed opaquely, but the
+event is updated every second while open (sizes, duration) and the first
+1 MiB of each direction is stored as request/response body for hex
+inspection. Known protocols are labeled — e.g. Telegram's MTProto (by its
+data-centre ranges and framing bytes) and SSH — so it is clear why no HTTP
+appears for such apps.
+
 ## Policy (host protection)
 
 Default: deny loopback, link-local (incl. cloud metadata 169.254.169.254),

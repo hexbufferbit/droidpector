@@ -9,7 +9,7 @@ export function devInfo() {
   return { url, base, token, dev };
 }
 
-export type TrafficKind = 'all' | 'get' | 'post' | 'json' | 'image' | 'error' | '401' | 'html' | 'http' | 'ws' | 'pinned' | 'bulk';
+export type TrafficKind = 'all' | 'get' | 'post' | 'json' | 'image' | 'error' | '401' | 'html' | 'http' | 'ws' | 'pinned' | 'bulk' | 'tcp';
 
 /** traffic generates REAL traffic through the simulated guest and the real capture pipeline. */
 export async function traffic(kind: TrafficKind): Promise<number> {

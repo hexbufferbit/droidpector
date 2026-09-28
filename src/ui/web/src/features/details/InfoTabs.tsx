@@ -1,10 +1,17 @@
 import type { EventDetail, Timing } from '../../api/types';
+import { Illustration } from '../../components/Icon';
 import { formatBytes, formatDateTime, formatDuration } from '../../lib/format';
 import { reasonText } from './EncryptedNotice';
 
 export function QueryTab({ d }: { d: EventDetail }) {
   const params = d.queryParams ?? [];
-  if (params.length === 0) return <div className="empty-state">No query parameters</div>;
+  if (params.length === 0)
+    return (
+      <div className="empty-state">
+        <Illustration name="search" size={44} />
+        <p className="empty-title">No query parameters</p>
+      </div>
+    );
   return (
     <table className="kv-table query-table">
       <thead>
@@ -16,7 +23,7 @@ export function QueryTab({ d }: { d: EventDetail }) {
       <tbody>
         {params.map((p, i) => (
           <tr key={i}>
-            <td className="mono selectable">{p.name}</td>
+            <td className="mono key selectable">{p.name}</td>
             <td className="mono selectable">{p.value}</td>
           </tr>
         ))}
@@ -25,19 +32,20 @@ export function QueryTab({ d }: { d: EventDetail }) {
   );
 }
 
-export const PHASES: { key: keyof Timing; label: string; cls: string }[] = [
-  { key: 'blocked', label: 'Queueing / blocked', cls: 't-blocked' },
-  { key: 'dns', label: 'DNS lookup', cls: 't-dns' },
-  { key: 'connect', label: 'Initial connection', cls: 't-connect' },
-  { key: 'tls', label: 'TLS handshake', cls: 't-tls' },
-  { key: 'send', label: 'Request sent', cls: 't-send' },
-  { key: 'wait', label: 'Waiting for server response', cls: 't-wait' },
-  { key: 'receive', label: 'Content download', cls: 't-receive' },
+export const PHASES: { key: keyof Timing; label: string; short: string; cls: string }[] = [
+  { key: 'blocked', label: 'Queueing / blocked', short: 'Blocked', cls: 't-blocked' },
+  { key: 'dns', label: 'DNS lookup', short: 'DNS', cls: 't-dns' },
+  { key: 'connect', label: 'Initial connection', short: 'Connect', cls: 't-connect' },
+  { key: 'tls', label: 'TLS handshake', short: 'TLS', cls: 't-tls' },
+  { key: 'send', label: 'Request sent', short: 'Send', cls: 't-send' },
+  { key: 'wait', label: 'Waiting for server response', short: 'Wait (TTFB)', cls: 't-wait' },
+  { key: 'receive', label: 'Content download', short: 'Receive', cls: 't-receive' },
 ];
 
 export interface WaterfallBar {
   key: keyof Timing;
   label: string;
+  short: string;
   cls: string;
   start: number;
   duration: number; // -1 = n/a
@@ -66,36 +74,65 @@ export function waterfall(t: Timing): { bars: WaterfallBar[]; total: number } {
 }
 
 export function TimingTab({ d }: { d: EventDetail }) {
-  if (!d.timing) return <div className="empty-state">No timing information</div>;
+  if (!d.timing)
+    return (
+      <div className="empty-state">
+        <Illustration name="clock" size={44} />
+        <p className="empty-title">No timing information</p>
+      </div>
+    );
   const { bars, total } = waterfall(d.timing);
   const scale = total > 0 ? total : 1;
+  const totalMs = d.durationMs >= 0 ? d.durationMs : total;
+  // TLS overlaps connect: leave it out of the stacked summary bar.
+  const stacked = bars.filter((b) => b.duration > 0 && b.key !== 'tls');
   return (
     <div className="timing-tab">
-      <p className="muted">Started {formatDateTime(d.timestamp)}</p>
+      <div className="timing-summary">
+        <div className="timing-stack" role="img" aria-label={`Total ${formatDuration(totalMs)}`}>
+          {stacked.map((b) => (
+            <span key={b.key} className={`timing-seg ${b.cls}`} style={{ flexGrow: b.duration, flexBasis: 0 }} title={`${b.label}: ${formatDuration(b.duration)}`} />
+          ))}
+        </div>
+        <div className="timing-meta">
+          <span className="muted">Started {formatDateTime(d.timestamp)}</span>
+          <span className="timing-total-value num">{formatDuration(totalMs)}</span>
+        </div>
+      </div>
       <table className="timing-table">
         <tbody>
           {bars.map((b) => (
-            <tr key={b.key}>
-              <th scope="row">{b.label}</th>
+            <tr key={b.key} className={b.duration < 0 ? 'na' : ''}>
+              <th scope="row">
+                <span className={`swatch ${b.cls}`} aria-hidden="true" />
+                {b.label}
+              </th>
               <td className="timing-bar-cell">
                 {b.duration >= 0 && (
                   <div
                     className={`timing-bar ${b.cls}`}
-                    style={{ left: `${(b.start / scale) * 100}%`, width: `max(2px, ${(b.duration / scale) * 100}%)` }}
+                    style={{ left: `${(b.start / scale) * 100}%`, width: `max(3px, ${(b.duration / scale) * 100}%)` }}
                     title={`${b.label}: ${formatDuration(b.duration)}`}
                   />
                 )}
               </td>
-              <td className="timing-value">{b.duration >= 0 ? formatDuration(b.duration) : <span className="muted">n/a</span>}</td>
+              <td className="timing-value num">{b.duration >= 0 ? formatDuration(b.duration) : <span className="muted">n/a</span>}</td>
             </tr>
           ))}
           <tr className="timing-total">
             <th scope="row">Total</th>
             <td />
-            <td className="timing-value">{formatDuration(d.durationMs >= 0 ? d.durationMs : total)}</td>
+            <td className="timing-value num">{formatDuration(totalMs)}</td>
           </tr>
         </tbody>
       </table>
+      <ul className="timing-legend" aria-label="Legend">
+        {PHASES.map((p) => (
+          <li key={p.key}>
+            <span className={`swatch ${p.cls}`} aria-hidden="true" /> {p.short}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -123,14 +160,14 @@ export function ConnectionTab({ d }: { d: EventDetail }) {
           {(c.bytesUp > 0 || c.bytesDown > 0) && (
             <>
               <dt>Bytes sent / received</dt>
-              <dd>
+              <dd className="num">
                 {formatBytes(c.bytesUp)} / {formatBytes(c.bytesDown)}
               </dd>
             </>
           )}
         </dl>
       ) : (
-        <p className="muted">No connection information.</p>
+        <p className="muted pad">No connection information.</p>
       )}
       {t && (
         <>
@@ -198,7 +235,13 @@ export function ConnectionTab({ d }: { d: EventDetail }) {
 
 export function DnsTab({ d }: { d: EventDetail }) {
   const dns = d.dns;
-  if (!dns) return <div className="empty-state">No DNS information</div>;
+  if (!dns)
+    return (
+      <div className="empty-state">
+        <Illustration name="globe" size={44} />
+        <p className="empty-title">No DNS information</p>
+      </div>
+    );
   return (
     <div className="dns-tab">
       <dl className="kv">
@@ -225,14 +268,14 @@ export function DnsTab({ d }: { d: EventDetail }) {
               <tr key={i}>
                 <td className="mono">{a.name}</td>
                 <td>{a.type}</td>
-                <td>{a.ttl}s</td>
+                <td className="num">{a.ttl}s</td>
                 <td className="mono selectable">{a.data}</td>
               </tr>
             ))}
           </tbody>
         </table>
       ) : (
-        <p className="muted">No answers</p>
+        <p className="muted pad">No answers</p>
       )}
     </div>
   );

@@ -6,7 +6,7 @@ import { DetailsPanel } from './features/details/DetailsPanel';
 import { AndroidPane } from './features/display/AndroidPane';
 import { NetworkPanel } from './features/network/NetworkPanel';
 import { EventPager } from './features/network/pager';
-import { Banners, ProgressBar, StatusPill, Toolbar } from './features/sandbox/Chrome';
+import { AppOnlyChip, Banners, ProgressBar, StatusPill, Toolbar } from './features/sandbox/Chrome';
 import { Dialogs, ErrorDialog } from './features/sandbox/Dialogs';
 import { SessionSelector } from './features/sessions/SessionSelector';
 import { startApp } from './state/app';
@@ -35,11 +35,14 @@ export function App() {
     <div className="app">
       <header className="app-header">
         <h1 className="app-title">
-          <img className="app-logo" src="./icon.png" alt="" width={22} height={22} />
-          droidpector
+          <img className="app-logo" src="./logo.png" alt="" width={26} height={26} />
+          <span className="app-name">droidpector</span>
         </h1>
         <SessionSelector />
-        <StatusPill />
+        <div className="header-right">
+          <AppOnlyChip />
+          <StatusPill />
+        </div>
         <ProgressBar />
       </header>
       <Toolbar />
@@ -48,16 +51,16 @@ export function App() {
         <SplitPane
           key={narrow ? 'v' : 'h'}
           direction={narrow ? 'vertical' : 'horizontal'}
-          storageKey={narrow ? 'apkinspector.split.main.narrow' : 'apkinspector.split.main'}
-          defaultFraction={narrow ? 0.4 : 0.34}
-          minFirst={220}
-          minSecond={320}
+          storageKey={narrow ? 'droidpector.split.main.narrow' : 'droidpector.split.main'}
+          defaultFraction={narrow ? 0.45 : 0.28}
+          minFirst={260}
+          minSecond={360}
           label="Resize Android and Network panes"
           first={<AndroidPane />}
           second={
             <SplitPane
               direction="vertical"
-              storageKey="apkinspector.split.network"
+              storageKey="droidpector.split.network"
               defaultFraction={0.55}
               minFirst={140}
               minSecond={120}

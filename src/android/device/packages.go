@@ -286,3 +286,27 @@ pick:
 	}
 	return choice, nil
 }
+
+// SetRotation forces the display orientation (0 = portrait, 1 = 90° … 3 =
+// 270°) the way the emulator's rotate button does: auto-rotation is turned
+// off and user_rotation is set. The setting persists on the data disk.
+func (d *Device) SetRotation(ctx context.Context, orientation int) error {
+	if orientation < 0 || orientation > 3 {
+		return fmt.Errorf("rotation must be 0-3, got %d", orientation)
+	}
+	_, err := d.runOK(ctx, fmt.Sprintf("settings put system accelerometer_rotation 0 && settings put system user_rotation %d", orientation))
+	return err
+}
+
+// Rotation returns the current forced orientation (0 when unset).
+func (d *Device) Rotation(ctx context.Context) (int, error) {
+	r, err := d.run(ctx, "settings get system user_rotation")
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(r.stdout))
+	if err != nil || n < 0 || n > 3 {
+		return 0, nil
+	}
+	return n, nil
+}

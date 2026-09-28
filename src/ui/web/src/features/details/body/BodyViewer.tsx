@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, links, toApiError } from '../../../api/client';
 import type { Body, BodyKind, BodyRef, ErrorInfo } from '../../../api/types';
 import { ErrorView } from '../../../components/ErrorView';
-import { Icon } from '../../../components/Icon';
+import { Icon, Illustration } from '../../../components/Icon';
 import { decodeUtf8 } from '../../../lib/bytes';
 import { formatBytes, formatBytesExact } from '../../../lib/format';
 import type { Json } from '../../../lib/jsonTree';
+import { CodeView } from './CodeView';
 import { HexView } from './HexView';
 import { ImageView } from './ImageView';
 import { JsonView } from './JsonView';
@@ -57,11 +58,13 @@ export interface BodyViewerProps {
   bodyRef?: BodyRef;
   /** kind classified by the core in the event detail */
   kindHint?: BodyKind;
+  /** the body is the captured prefix of a raw TCP/TLS stream (shown as hex with a note) */
+  rawStream?: boolean;
   /** injectable loader for tests */
   load?: (id: string, part: 'request' | 'response') => Promise<Body>;
 }
 
-export function BodyViewer({ eventId, part, bodyRef, kindHint, load = api.body }: BodyViewerProps) {
+export function BodyViewer({ eventId, part, bodyRef, kindHint, rawStream = false, load = api.body }: BodyViewerProps) {
   const [body, setBody] = useState<Body | null>(null);
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [mode, setMode] = useState<Mode | null>(null);
@@ -82,14 +85,14 @@ export function BodyViewer({ eventId, part, bodyRef, kindHint, load = api.body }
     };
   }, [eventId, part, bodyRef, load]);
 
-  const kind: BodyKind = body ? (body.kind === 'empty' ? 'empty' : body.kind || kindHint || 'binary') : (kindHint ?? 'empty');
+  const kind: BodyKind = body ? (body.kind === 'empty' ? 'empty' : rawStream ? 'binary' : body.kind || kindHint || 'binary') : (kindHint ?? 'empty');
   const text = useMemo(() => (body && kind !== 'image' && kind !== 'binary' ? decodeUtf8(body.bytes) : ''), [body, kind]);
   const json = useMemo(() => (kind === 'json' && body && body.bytes.length <= LARGE_BODY * 4 ? prettyJson(text) : null), [kind, body, text]);
 
-  if (!bodyRef) return <div className="empty-state">No body</div>;
+  if (!bodyRef) return <Empty rawStream={rawStream} part={part} />;
   if (error) return <ErrorView error={error} compact />;
   if (!body) return <div className="loading">Loading body…</div>;
-  if (body.bytes.length === 0) return <div className="empty-state">No body</div>;
+  if (body.bytes.length === 0) return <Empty rawStream={rawStream} part={part} />;
 
   const modes = modesFor(kind);
   const active: Mode = mode && modes.includes(mode) ? mode : defaultMode(kind, body.bytes.length);
@@ -121,7 +124,13 @@ export function BodyViewer({ eventId, part, bodyRef, kindHint, load = api.body }
 
   return (
     <div className="body-viewer">
-      {truncated && (
+      {rawStream && (
+        <div className="banner info small" role="note">
+          <Icon name="info" /> Raw TCP stream ({part === 'request' ? 'sent by the app' : 'received from the server'}, first {formatBytesExact(body.bytes.length)}
+          {full > body.bytes.length ? ` of ${formatBytesExact(full)}` : ''}).
+        </div>
+      )}
+      {truncated && !rawStream && (
         <div className="banner warning small" role="note">
           <Icon name="warning" /> Body truncated: {formatBytesExact(stored)} of {formatBytesExact(full)} captured.
         </div>
@@ -135,7 +144,7 @@ export function BodyViewer({ eventId, part, bodyRef, kindHint, load = api.body }
         {modes.length > 1 && (
           <div className="segmented" role="group" aria-label="Body view">
             {modes.map((m) => (
-              <button key={m} className={m === active ? 'active' : ''} aria-pressed={m === active} onClick={() => setMode(m)}>
+              <button key={m} className={`seg${m === active ? ' active' : ''}`} aria-pressed={m === active} onClick={() => setMode(m)}>
                 {MODE_LABEL[m]}
               </button>
             ))}
@@ -146,14 +155,24 @@ export function BodyViewer({ eventId, part, bodyRef, kindHint, load = api.body }
             <input type="checkbox" checked={wrap} onChange={(e) => setWrap(e.target.checked)} /> Wrap lines
           </label>
         )}
-        <span className="muted body-size">
-          {kind.toUpperCase()} · {formatBytes(body.bytes.length)}
+        <span className="muted body-size num">
+          {rawStream ? 'STREAM' : kind.toUpperCase()} · {formatBytes(body.bytes.length)}
         </span>
-        <a className="btn small" href={download} download title="Download the body">
+        <a className="btn small ghost" href={download} download title="Download the body">
           <Icon name="download" /> Download
         </a>
       </div>
       <div className="viewer-content">{view}</div>
+    </div>
+  );
+}
+
+function Empty({ rawStream, part }: { rawStream: boolean; part: 'request' | 'response' }) {
+  return (
+    <div className="empty-state">
+      <Illustration name="inbox" size={44} />
+      <p className="empty-title">No body</p>
+      <p className="empty-sub">{rawStream ? `No ${part === 'request' ? 'outgoing' : 'incoming'} bytes were captured on this stream.` : `This ${part} carried no body.`}</p>
     </div>
   );
 }
@@ -164,7 +183,7 @@ function RawText({ text, wrap, note }: { text: string; wrap: boolean; note?: str
     <>
       {note && <div className="banner info small">{note}</div>}
       {shown.length < text.length && <div className="banner info small">Showing the first {formatBytes(shown.length)}; download the body to see everything.</div>}
-      <pre className={`code-view mono${wrap ? ' wrap' : ''}`}>{shown}</pre>
+      <CodeView text={shown} wrap={wrap} />
     </>
   );
 }

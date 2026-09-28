@@ -52,9 +52,9 @@ export function SessionSelector() {
   return (
     <div className="session-selector" ref={ref}>
       <button className="session-button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)} title="Choose a capture session">
-        {isLive && <span className="live-dot" aria-label="Live" />}
+        {isLive ? <span className="live-dot" aria-label="Live" /> : <Icon name="clock" size={12} className="muted" />}
         <span className="session-text">{current ? sessionLabel(current) : 'No capture session'}</span>
-        <Icon name="chevronDown" size={10} />
+        <Icon name="chevronDown" size={10} className="muted" />
       </button>
       {open && (
         <div className="popover session-popover">
@@ -81,10 +81,10 @@ export function SessionSelector() {
               >
                 <div className="session-line">
                   {s.id === live && !s.endedAt && <span className="live-dot" aria-label="Live" />}
-                  {s.saved && <Icon name="save" size={11} aria-label="Saved" />}
-                  <span>{sessionLabel(s)}</span>
+                  {s.saved && <Icon name="save" size={11} aria-label="Saved" className="muted" />}
+                  <span className="session-line-text">{sessionLabel(s)}</span>
                 </div>
-                <div className="muted small">
+                <div className="muted small num">
                   {new Date(s.startedAt).toLocaleString()} · {formatBytes(s.bytes)}
                   {s.package ? ` · ${s.package}` : ''}
                 </div>
@@ -95,23 +95,23 @@ export function SessionSelector() {
             <button className="btn small" disabled={!running} title={running ? 'Start a new capture session' : 'Start the sandbox first'} onClick={() => { setOpen(false); void actions.newSession(); }}>
               <Icon name="plus" /> New session
             </button>
-            <button className="btn small" disabled={!captureActive} onClick={() => { setOpen(false); void actions.stopCapture(); }}>
+            <button className="btn small ghost" disabled={!captureActive} onClick={() => { setOpen(false); void actions.stopCapture(); }}>
               <Icon name="stop" /> Stop capture
             </button>
             <span className="spacer" />
-            <button className="btn small" disabled={!current} onClick={() => { setOpen(false); setConfirm('clear'); }}>
+            <button className="btn small ghost" disabled={!current} onClick={() => { setOpen(false); setConfirm('clear'); }}>
               Clear
             </button>
-            <button className="btn small" disabled={!current} onClick={() => { setOpen(false); actions.openDialog('saveSession'); }}>
+            <button className="btn small ghost" disabled={!current} onClick={() => { setOpen(false); actions.openDialog('saveSession'); }}>
               <Icon name="save" /> Save
             </button>
             {current ? (
-              <a className="btn small" href={links.sessionHar(current.id)} download onClick={() => setOpen(false)}>
+              <a className="btn small ghost" href={links.sessionHar(current.id)} download onClick={() => setOpen(false)}>
                 <Icon name="download" /> Export HAR
               </a>
             ) : null}
             <button
-              className="btn small danger"
+              className="btn small ghost danger"
               disabled={!current || isLive}
               title={isLive ? 'The live session cannot be deleted' : 'Delete this session'}
               onClick={() => { setOpen(false); setConfirm('delete'); }}

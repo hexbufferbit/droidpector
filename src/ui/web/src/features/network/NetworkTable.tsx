@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { GeneratorInfo, SortKey, Summary } from '../../api/types';
 import { ContextMenu, type MenuItem } from '../../components/ContextMenu';
+import { Illustration } from '../../components/Icon';
 import { computeWindow, isAtBottom, scrollTopToReveal } from '../../lib/virtual';
 import { revealEvent } from '../../state/app';
 import { COLUMNS, gridTemplate, isErrorRow, loadColumnWidths, saveColumnWidths } from './columns';
 import type { EventPager } from './pager';
 import { rowActions } from './rowActions';
 
-export const ROW_HEIGHT = 24;
-const HEADER_HEIGHT = 26;
+export const ROW_HEIGHT = 28;
+const HEADER_HEIGHT = 30;
 const OVERSCAN = 12;
 
 export interface NetworkTableProps {
@@ -227,7 +228,6 @@ export function NetworkTable({ pager, selectedId, onSelect, onOpen, sort, desc, 
     if (isErrorRow(r)) cls.push('error');
     if (r.state === 'pending') cls.push('pending');
     if (r.encrypted) cls.push('encrypted');
-    if (i % 2) cls.push('odd');
     rows.push(
       <div
         key={r.id}
@@ -288,8 +288,12 @@ export function NetworkTable({ pager, selectedId, onSelect, onOpen, sort, desc, 
                 className={`net-hcell${c.align === 'right' ? ' right' : ''}${active ? ' sorted' : ''}`}
               >
                 <button className="net-sort" onClick={() => onSort(c.sort)} title={`Sort by ${c.label}`}>
-                  {c.label}
-                  {active && <span className="sort-arrow" aria-hidden="true">{desc ? '▼' : '▲'}</span>}
+                  <span className="net-sort-label">{c.label}</span>
+                  {active && (
+                    <span className="sort-arrow" aria-hidden="true">
+                      {desc ? '↓' : '↑'}
+                    </span>
+                  )}
                 </button>
                 <span
                   className="col-resize"
@@ -311,8 +315,14 @@ export function NetworkTable({ pager, selectedId, onSelect, onOpen, sort, desc, 
           {rows}
         </div>
         {snap.loaded && snap.total === 0 && (
-          <div className="net-empty">
-            {snap.all > 0 ? 'No requests match the current filter.' : 'No requests captured yet. Traffic of the app under test appears here as it happens.'}
+          <div className="net-empty empty-state">
+            <Illustration name={snap.all > 0 ? 'filter' : 'globe'} />
+            <p className="empty-title">{snap.all > 0 ? 'Nothing matches this filter' : 'No requests yet'}</p>
+            <p className="empty-sub">
+              {snap.all > 0
+                ? 'Loosen the filter or pick “All” above to see every request of this session.'
+                : 'Install an APK and use the app: every request it makes shows up here as it happens.'}
+            </p>
           </div>
         )}
       </div>
