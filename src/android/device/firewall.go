@@ -14,7 +14,8 @@ import (
 // a blocked app's SYN never leaves Android, and the gateway never sees it.
 const fwChain = "droidpector"
 
-// FirewallRules describes what may leave the sandbox besides the allowed apps.
+// FirewallRules describes what may leave the sandbox besides the allowed apps
+// (loopback, DHCP and NTP are always allowed).
 type FirewallRules struct {
 	// AllowUIDs are the apps under test (their Linux UIDs).
 	AllowUIDs []int
@@ -45,6 +46,9 @@ func firewallScript(r FirewallRules) string {
 		if ipt == "iptables" {
 			must("%s -w -A %s -p udp --dport 67:68 -j RETURN", ipt, fwChain) // DHCP
 		}
+		// Network time: a wrong clock makes every HTTPS certificate look
+		// invalid, so Android's time sync (NTP, from a system process) stays open.
+		must("%s -w -A %s -p udp --dport 123 -j RETURN", ipt, fwChain)
 		if r.AllowDNS {
 			must("%s -w -A %s -p udp --dport 53 -j RETURN", ipt, fwChain)
 			must("%s -w -A %s -p tcp --dport 53 -j RETURN", ipt, fwChain)

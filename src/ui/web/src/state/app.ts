@@ -4,6 +4,7 @@ import { api, toApiError, wsUrl, type ApiError } from '../api/client';
 import type { APKEntry, ErrorInfo, Info, Session, Status, WSMessage } from '../api/types';
 import { ReconnectingSocket, type SocketState } from '../api/ws';
 import { createStore, Emitter } from './store';
+import { recordBoot } from '../lib/installProgress';
 
 export interface Toast {
   id: number;
@@ -119,6 +120,7 @@ export async function run<T>(fn: () => Promise<T>, opts: { retryStart?: boolean 
 export function applyStatus(next: Status): void {
   const prev = appStore.get().status;
   appStore.set({ status: next });
+  if (prev?.state === 'booting' && next.state === 'provisioning') recordBoot(Date.parse(next.since) - Date.parse(prev.since));
   if (next.state === 'error' && next.error && (prev?.state !== 'error' || prev.since !== next.since)) {
     appStore.set({ errorDialog: { error: next.error, retryStart: true } });
   }
@@ -129,6 +131,13 @@ export function applyStatus(next: Status): void {
   const up = appStore.get().upload;
   if (up?.entry?.info && next.app?.package === up.entry.info.package && next.state === 'ready') {
     appStore.set({ upload: null });
+  } else if (up?.phase === 'starting' && next.state === 'error' && next.error) {
+    // The install runs in the background: its failure arrives as a status.
+    appStore.set({ upload: { ...up, phase: 'failed', error: next.error } });
+  } else if (up?.phase === 'starting' && next.state === 'stopped' && prev && prev.state !== 'stopped') {
+    appStore.set({
+      upload: { ...up, phase: 'failed', error: { code: 'interrupted', title: 'Installation was interrupted because the sandbox stopped.', causes: ['Start the sandbox and install the APK again.'] } },
+    });
   }
 }
 

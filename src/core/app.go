@@ -173,6 +173,7 @@ func (a *App) statsFor(sessionID string) (query.Stats, error) {
 func (a *App) Close() {
 	a.once.Do(func() {
 		if a.Sandbox != nil {
+			a.Sandbox.Shutdown() // a boot in progress must not delay closing
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			a.Sandbox.Stop(ctx)
 			cancel()

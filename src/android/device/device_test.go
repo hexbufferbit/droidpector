@@ -324,6 +324,7 @@ func TestFirewallScriptAndCounters(t *testing.T) {
 		"--ctstate ESTABLISHED,RELATED -j RETURN",
 		"--dport 67:68 -j RETURN",
 		"-p udp --dport 53 -j RETURN",
+		"-p udp --dport 123 -j RETURN", // NTP: a wrong clock breaks HTTPS
 		"--uid-owner 10123 -j RETURN",
 		"--uid-owner 10200 -j RETURN",
 		"-p tcp -j REJECT --reject-with tcp-reset",

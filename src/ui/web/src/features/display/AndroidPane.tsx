@@ -227,7 +227,7 @@ export function AndroidPane() {
       <div className="android-stage">
         <DisplayCanvas ref={display} active={displayReady} orientation={orientation} overlay={overlay} />
         {upload && (
-          <div className="apk-card-wrap">
+          <div className={`apk-card-wrap${upload.phase === 'starting' ? ' compact' : ''}`}>
             <ApkCard upload={upload} />
           </div>
         )}

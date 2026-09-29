@@ -26,6 +26,11 @@ type fakeADBD struct {
 	requireAuth  bool
 	acceptNewKey bool
 	shell        func(cmd string) (stdout, stderr string, code int)
+	rootReply    string // answer of the "root:" service ("" = unsupported)
+	// eagerShell makes shell v2 behave like real adbd for a quick command:
+	// it runs without waiting for stdin to be closed, and the output, exit
+	// status and CLSE are sent before the host writes anything.
+	eagerShell bool
 
 	conn   net.Conn
 	wmu    sync.Mutex
@@ -264,6 +269,8 @@ func (d *fakeADBD) handler(service string) func(*fakeStream) {
 		return func(s *fakeStream) { d.shellLegacy(s, strings.TrimPrefix(service, "shell:")) }
 	case service == "sync:":
 		return d.sync
+	case service == "root:" && d.rootReply != "":
+		return func(s *fakeStream) { s.Write([]byte(d.rootReply)) }
 	case strings.HasPrefix(service, "exec:echo "):
 		return func(s *fakeStream) { s.Write([]byte(strings.TrimPrefix(service, "exec:echo ") + "\n")) }
 	}
@@ -271,6 +278,24 @@ func (d *fakeADBD) handler(service string) func(*fakeStream) {
 }
 
 func (d *fakeADBD) shellV2(s *fakeStream, cmd string) {
+	if d.eagerShell {
+		out, errOut, code := d.shell(cmd)
+		var b []byte
+		for _, p := range []struct {
+			id   byte
+			data []byte
+		}{{shellStdout, []byte(out)}, {shellStderr, []byte(errOut)}, {shellExit, []byte{byte(code)}}} {
+			if len(p.data) == 0 {
+				continue
+			}
+			hdr := [5]byte{p.id}
+			binary.LittleEndian.PutUint32(hdr[1:], uint32(len(p.data)))
+			b = append(append(b, hdr[:]...), p.data...)
+		}
+		// One WRTE without waiting for the host's ack, then CLSE (s.close).
+		d.send(Message{Command: CmdWRTE, Arg0: s.local, Arg1: s.remote, Data: b})
+		return
+	}
 	// Consume stdin until the host closes it.
 	var hdr [5]byte
 	if _, err := io.ReadFull(s, hdr[:]); err != nil || hdr[0] != shellCloseStdin {

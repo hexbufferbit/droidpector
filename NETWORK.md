@@ -12,8 +12,9 @@ Android guest (10.0.2.15 — the subnet is chosen at startup, see "VPNs")
                                                      │
       ┌───────────────┬──────────────┬───────────────┼───────────────────┐
    DHCP (:67)     DNS (:53 UDP/TCP)  TCP forwarder   UDP forwarder
-                   answered on host  │               QUIC (UDP/443) → ICMP unreachable
-                   + DNS event       │               others → host UDP NAT + UDP event
+                   answered on host  │               NTP (UDP/123) → answered from host clock
+                   + DNS event       │               QUIC (UDP/443) → ICMP unreachable
+                                     │               others → host UDP NAT + UDP event
                                      ▼
                          Policy check → upstream dial (host socket)
                                      │
@@ -46,9 +47,9 @@ never captured or exposed on a host port.
 By default only the app under test may reach the network. This is enforced
 *inside* the guest with iptables owner matching (the mechanism Android's own
 per-app data restrictions use): a `droidpector` chain is inserted first in
-OUTPUT and returns for loopback, DHCP, DNS, replies to host-initiated (ADB)
-connections and the allowed apps' UIDs, then rejects everything else with a
-TCP reset. Blocked system traffic (connectivity checks, time sync, OS updater,
+OUTPUT and returns for loopback, DHCP, DNS, NTP, replies to host-initiated
+(ADB) connections and the allowed apps' UIDs, then rejects everything else
+with a TCP reset. Blocked system traffic (connectivity checks, time sync, OS updater,
 app-link verification…) never reaches the gateway, so it neither appears in
 the list nor leaks. Captive-portal probing is disabled so Android does not
 mark the network as limited. The app is allowed when it is installed
@@ -133,6 +134,15 @@ byte-for-byte while two passive RFC 6455 parsers (one per direction) record
 frames: masking, fragmentation, control frames, and `permessage-deflate`
 (context takeover emulated with a 32 KiB dictionary). Frames > 64 KiB are
 truncated in the record only. Parser errors stop recording, never the relay.
+
+## Time (NTP)
+
+A wrong guest clock makes every HTTPS certificate look invalid. The clock is
+set from the host at every boot and restore, and NTP queries (UDP/123, to any
+server) are answered by the gateway from the host clock, recorded as `NTP`
+events. Public NTP is not always reachable — Google's `time.android.com` does
+not answer on some networks — and Android retrying unanswered queries was
+observed to stall its system process on emulated (TCG) machines.
 
 ## DNS
 

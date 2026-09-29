@@ -110,6 +110,38 @@ func scriptedShell(cmd string) (string, string, int) {
 	return "", "/system/bin/sh: " + cmd + ": inaccessible or not found\n", 127
 }
 
+// Real adbd runs a quick command at once: its output, exit status and CLSE
+// can all arrive before the host has sent "close stdin". The result must
+// still be returned (this failed with "closed by device" on fast machines).
+func TestShellV2CommandFinishesBeforeStdinIsClosed(t *testing.T) {
+	c := connect(t, newFake(func(d *fakeADBD) { d.shell = scriptedShell; d.eagerShell = true }), Config{})
+	for i := 0; i < 50; i++ {
+		out, errOut, code, err := c.Shell(context.Background(), "echo 0")
+		if err != nil || string(out) != "0\n" || len(errOut) != 0 || code != 0 {
+			t.Fatalf("run %d: %q %q %d %v", i, out, errOut, code, err)
+		}
+		_, errOut, code, err = c.Shell(context.Background(), "nosuchcmd")
+		if err != nil || code != 127 || !strings.Contains(string(errOut), "not found") {
+			t.Fatalf("run %d (failing command): %q %d %v", i, errOut, code, err)
+		}
+	}
+}
+
+func TestRootReplies(t *testing.T) {
+	c := connect(t, newFake(func(d *fakeADBD) { d.rootReply = "restarting adbd as root\n" }), Config{})
+	if msg, err := c.Root(context.Background()); err != nil || msg != "restarting adbd as root" {
+		t.Fatalf("userdebug: %q %v", msg, err)
+	}
+	c = connect(t, newFake(func(d *fakeADBD) { d.rootReply = "adbd cannot run as root in production builds\n" }), Config{})
+	if _, err := c.Root(context.Background()); !errors.Is(err, ErrRootRefused) {
+		t.Fatalf("production build must be reported as ErrRootRefused, got %v", err)
+	}
+	// The connection stays usable after a refusal.
+	if _, _, _, err := c.Shell(context.Background(), "echo ok"); err != nil {
+		t.Fatalf("connection unusable after refusal: %v", err)
+	}
+}
+
 func TestShellV2(t *testing.T) {
 	c := connect(t, newFake(func(d *fakeADBD) { d.shell = scriptedShell }), Config{})
 	ctx := context.Background()

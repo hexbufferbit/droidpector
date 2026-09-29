@@ -69,23 +69,64 @@ func activateExisting() bool {
 	return true
 }
 
-// acquireInstance takes the single-instance lock. A previous instance that
-// is still closing (its window gone, the core finishing) is waited for
-// briefly instead of being reported as running.
+const closingEventName = "Local\\droidpector-Closing"
+
+// markClosing tells new instances that this one is shutting down, so they
+// wait for it instead of reporting "already running". The handle stays open
+// until the process exits.
+func markClosing() {
+	name, _ := windows.UTF16PtrFromString(closingEventName)
+	windows.CreateEvent(nil, 1, 1, name)
+}
+
+func instanceClosing() bool {
+	name, _ := windows.UTF16PtrFromString(closingEventName)
+	h, err := windows.OpenEvent(windows.SYNCHRONIZE, false, name)
+	if err != nil {
+		return false
+	}
+	windows.CloseHandle(h)
+	return true
+}
+
+// acquireInstance takes the single-instance lock. If another instance is
+// running, its window is brought to the front instead. If it is closing
+// (saving the sandbox), this one waits for it and then starts normally.
 func acquireInstance() (func(), bool) {
-	deadline := time.Now().Add(15 * time.Second)
+	start := time.Now()
+	shown := false
 	for {
 		if release, ok := singleInstance(); ok {
 			return release, true
 		}
-		if activateExisting() {
-			return nil, false // the running window is in front now: nothing to report
-		}
-		if time.Now().After(deadline) {
-			messageBox("droidpector", "droidpector is still closing (saving the Android sandbox). Wait a moment and start it again.")
+		switch closing := instanceClosing(); {
+		case closing:
+			if !shown { // show its "Closing droidpector..." page meanwhile
+				activateExisting()
+				shown = true
+			}
+			if time.Since(start) > shutdownGrace+30*time.Second {
+				messageBox("droidpector", "The previous droidpector window is still closing. Wait until it has closed and start droidpector again.")
+				return nil, false
+			}
+		case activateExisting():
+			return nil, false // the running window is in front now
+		case time.Since(start) > 15*time.Second:
+			messageBox("droidpector", "droidpector is already running or still closing. Wait a moment and start it again.")
 			return nil, false
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// kill ends the core immediately (its Job Object takes QEMU with it).
+func (s *supervisor) kill() {
+	s.mu.Lock()
+	s.closing = true
+	cp := s.cur
+	s.mu.Unlock()
+	if cp != nil {
+		cp.kill()
 	}
 }
 
@@ -103,6 +144,7 @@ func interceptClose(w webview2.WebView, sup *supervisor) {
 				sup.kill() // second close: quit now
 				done.Store(true)
 			} else {
+				markClosing()
 				w.SetHtml(loadingPage("Closing droidpector...\n\nSaving the Android sandbox so the next start takes seconds. Close the window again to quit immediately."))
 				go func() {
 					sup.stopWithin(shutdownGrace)

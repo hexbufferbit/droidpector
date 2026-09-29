@@ -660,16 +660,25 @@ func (s *Stream) writable() error {
 
 func (s *Stream) waitAck() error {
 	for {
+		// Take the change channel before checking the state: a close that
+		// lands in between then wakes the wait below instead of being missed
+		// (after CLSE the device never acknowledges, so a missed close would
+		// block forever).
 		s.mu.Lock()
 		ch := s.changed
 		s.mu.Unlock()
 		select {
 		case <-s.ack:
 			return nil
+		default:
+		}
+		if err := s.writable(); err != nil {
+			return err
+		}
+		select {
+		case <-s.ack:
+			return nil
 		case <-ch:
-			if err := s.writable(); err != nil {
-				return err
-			}
 		}
 	}
 }

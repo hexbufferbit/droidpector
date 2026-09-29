@@ -32,9 +32,10 @@ import (
 const testHost = "test.apkinspector.internal"
 
 type harness struct {
-	t   *testing.T
-	app *core.App
-	srv *testserver.Server
+	t       *testing.T
+	app     *core.App
+	srv     *testserver.Server
+	dataDir string
 }
 
 func env(t *testing.T, name string) string {
@@ -75,7 +76,7 @@ func newHarness(t *testing.T, dataDir string) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, app: app, srv: srv}
+	h := &harness{t: t, app: app, srv: srv, dataDir: dataDir}
 	t.Cleanup(func() {
 		app.Close()
 		logs.Close()
@@ -136,9 +137,17 @@ func (h *harness) dumpDiagnostics() {
 			"logcat -d -t 300 | grep -iE 'testapp|AndroidRuntime|ssl|cert' | tail -40",
 			"ls /system/etc/security/cacerts | wc -l; grep cacerts /proc/mounts",
 		} {
-			out, _, _ := dev.Run(ctx, c)
+			out, _, err := dev.Run(ctx, c)
+			if err != nil {
+				out += "(command failed: " + err.Error() + ")"
+			}
 			h.t.Logf("$ %s\n%s", c, out)
 		}
+	}
+	// The kernel console shows why Android stopped responding or rebooted.
+	if b, err := os.ReadFile(filepath.Join(h.dataDir, "logs", "android-console.log")); err == nil {
+		lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+		h.t.Logf("android console (last lines):\n%s", strings.Join(lines[max(0, len(lines)-60):], "\n"))
 	}
 }
 
@@ -343,9 +352,10 @@ func (h *harness) tapText(ctx context.Context, text string, orientation int) {
 	var lx, ly int
 	deadline := time.Now().Add(4 * time.Minute)
 	var last string
+	var lastErr error
 	for lx == 0 && time.Now().Before(deadline) {
 		out, _, err := dev.Run(ctx, "uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; cat /sdcard/ui.xml")
-		last = out
+		last, lastErr = out, err
 		if err == nil {
 			landscape := false
 			if m := rootRe.FindStringSubmatch(out); m != nil {
@@ -379,7 +389,7 @@ func (h *harness) tapText(ctx context.Context, text string, orientation int) {
 		}
 		root := rootRe.FindStringSubmatch(last)
 		h.dumpDiagnostics()
-		h.t.Fatalf("view %q not found on screen in orientation %d (root %v, texts %v)", text, orientation, root, seen)
+		h.t.Fatalf("view %q not found on screen in orientation %d (root %v, texts %v, last error %v)", text, orientation, root, seen, lastErr)
 	}
 	// Touches are injected as a real touchscreen aligned with the panel, so
 	// the point to send is where the logical pixel sits in the natural

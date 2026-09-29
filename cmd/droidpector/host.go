@@ -164,14 +164,3 @@ func (s *supervisor) stopWithin(grace time.Duration) {
 		cp.shutdown(grace)
 	}
 }
-
-// kill ends the core immediately (its Job Object takes QEMU with it).
-func (s *supervisor) kill() {
-	s.mu.Lock()
-	s.closing = true
-	cp := s.cur
-	s.mu.Unlock()
-	if cp != nil {
-		cp.kill()
-	}
-}

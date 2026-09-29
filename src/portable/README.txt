@@ -51,6 +51,10 @@ First start
 The first start boots Android completely (a few minutes). When you stop the
 sandbox, its state is saved; the next start takes seconds.
 
+Closing the window saves the sandbox first (the window shows "Closing
+droidpector..." until it is done). Close it a second time to quit at once;
+the next start then boots Android completely.
+
 Do not extract into "C:\Program Files" (not writable); use e.g.
 C:\Tools\droidpector or your Desktop.
 

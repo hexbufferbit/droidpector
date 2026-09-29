@@ -630,6 +630,41 @@ func TestUntrustedUpstreamCertificateIsPassedThrough(t *testing.T) {
 	})
 }
 
+// Android's time sync must work even where public NTP servers are blocked:
+// the sandbox answers NTP from the host clock (a wrong clock breaks HTTPS).
+func TestNTPIsAnsweredFromTheHostClock(t *testing.T) {
+	e := newEnv(t, 0)
+	c, err := e.guest.DialUDP(netip.MustParseAddrPort("216.239.35.0:123")) // time.android.com
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	req := make([]byte, 48)
+	req[0] = 4<<3 | 3 // NTPv4, client
+	copy(req[40:48], []byte{1, 2, 3, 4, 5, 6, 7, 8})
+	before := time.Now()
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp := make([]byte, 128)
+	n, err := c.Read(resp)
+	if err != nil {
+		t.Fatalf("no NTP reply: %v", err)
+	}
+	if n != 48 || resp[0]&7 != 4 || resp[1] == 0 || !bytes.Equal(resp[24:32], req[40:48]) {
+		t.Fatalf("reply % x", resp[:n])
+	}
+	secs := int64(binary.BigEndian.Uint32(resp[40:44])) - 2208988800
+	if got := time.Unix(secs, 0); got.Before(before.Add(-2*time.Second)) || got.After(time.Now().Add(2*time.Second)) {
+		t.Fatalf("server time %v is not the host time %v", got, before)
+	}
+	ev := e.rec.wait(t, "ntp event", func(ev *model.Event) bool { return ev.Protocol == "NTP" })
+	if ev.Kind != model.KindUDP || ev.Port != 123 || ev.ResponseSize != 48 || ev.Error != "" {
+		t.Fatalf("event: %+v", ev)
+	}
+}
+
 func TestSandboxPolicyProtectsHost(t *testing.T) {
 	e := newEnv(t, 0)
 	_, port, _ := net.SplitHostPort(e.srv.HTTPAddr)

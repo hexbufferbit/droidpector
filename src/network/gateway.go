@@ -707,6 +707,15 @@ func (g *Gateway) onUDP(r *udp.ForwarderRequest) bool {
 		}
 		go g.guard("dns", func() { g.serveDNSUDP(g.ctx, gonet.NewUDPConn(&wq, ep), src, dst) })
 		return true
+	case dst.Port() == 123:
+		// Answered from the host clock (see ntp.go), whatever server was asked.
+		var wq waiter.Queue
+		ep, err := r.CreateEndpoint(&wq)
+		if err != nil {
+			return false
+		}
+		go g.guard("ntp", func() { g.serveNTP(gonet.NewUDPConn(&wq, ep), src, dst) })
+		return true
 	case dst.Port() == 67 || dst.Port() == 68:
 		return true // DHCP is served by the bound DHCP socket
 	case dst.Port() == 443 && g.opts.Policy.BlockQUIC:

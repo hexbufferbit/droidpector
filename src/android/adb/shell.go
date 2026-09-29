@@ -27,6 +27,10 @@ const (
 	legacyExitMarker = "__APKINSPECTOR_EXIT_"
 )
 
+// ErrRootRefused is returned by Root when adbd will not run as root
+// (production builds). adbd keeps running, so the connection stays usable.
+var ErrRootRefused = errors.New("adb: root refused")
+
 // ErrOutputTooLarge is returned when a shell command produces more output
 // than the client buffers.
 var ErrOutputTooLarge = fmt.Errorf("adb: shell output exceeds %d bytes", maxShellOutput)
@@ -70,7 +74,10 @@ func (c *Conn) shellV2(ctx context.Context, cmd string) ([]byte, []byte, int, er
 	code := -1
 	err := c.withStream(ctx, "shell,v2,raw:"+cmd, func(s *Stream) error {
 		// No stdin: tell the shell right away so commands reading it see EOF.
-		if _, err := s.Write([]byte{shellCloseStdin, 0, 0, 0, 0}); err != nil {
+		// adbd starts the command without waiting for this, so a quick
+		// command may already have finished and adbd closed the stream; its
+		// output and exit status are then buffered and read below.
+		if _, err := s.Write([]byte{shellCloseStdin, 0, 0, 0, 0}); err != nil && !errors.Is(err, io.ErrClosedPipe) {
 			return fmt.Errorf("adb: shell: %w", err)
 		}
 		var hdr [shellHeaderSize]byte
@@ -194,7 +201,7 @@ func (c *Conn) Root(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("adb: root: %w", err)
 	}
 	if strings.Contains(msg, "cannot run as root in production builds") {
-		return msg, fmt.Errorf("adb: root: %s", msg)
+		return msg, fmt.Errorf("%w: %s", ErrRootRefused, msg)
 	}
 	return msg, nil
 }

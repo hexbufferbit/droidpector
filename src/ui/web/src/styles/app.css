@@ -1301,6 +1301,53 @@ body.resizing-phone .phone-frame {
   overflow: auto;
   z-index: 3;
 }
+/* While installing, the card shrinks to a progress strip at the bottom so the
+   phone (and the boot animation) stays visible. */
+.apk-card-wrap.compact {
+  top: auto;
+  bottom: 12px;
+}
+.install-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.install-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.install-label {
+  flex: 1;
+  min-width: 0;
+}
+.install-pct {
+  font-weight: 600;
+  color: var(--text);
+}
+.install-status .progress {
+  height: 6px;
+  border-radius: 3px;
+}
+.install-steps {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.install-steps li.done {
+  color: var(--green);
+}
+.install-steps li.done::before {
+  content: '✓ ';
+}
+.install-steps li.active {
+  color: var(--text);
+  font-weight: 600;
+}
 .apk-card {
   background: var(--bg-2);
   border: 1px solid var(--hair);
@@ -1378,12 +1425,14 @@ body.resizing-phone .phone-frame {
   color: var(--red-text);
   font-weight: 600;
 }
-.apk-status {
-  margin: 0;
+.apk-more > summary {
+  cursor: pointer;
   color: var(--text-2);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  font-size: 12px;
+  width: fit-content;
+}
+.apk-more[open] > summary {
+  margin-bottom: 8px;
 }
 
 /* ---------------------------------------------------------------- key/value */

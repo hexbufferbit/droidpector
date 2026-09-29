@@ -128,6 +128,9 @@ type Sandbox struct {
 
 	appOnly bool           // sandbox firewall: only allowed apps may reach the network
 	allowed map[string]int // package → uid of the apps under test
+
+	life    context.Context // ends when the application shuts down
+	endLife context.CancelFunc
 }
 
 // NewSandbox wires the orchestrator.
@@ -139,8 +142,24 @@ func NewSandbox(cfg SandboxConfig, log, vmLog *slog.Logger, procs *platform.Proc
 	s := &Sandbox{cfg: cfg, log: log, vmLog: vmLog, procs: procs, gw: gw, sessions: sessions, rec: rec, streamer: streamer,
 		onStatus: onStatus, owners: newOwnerTable(), ownerPoke: make(chan struct{}, 1), appOnly: cfg.AppOnly, allowed: map[string]int{}}
 	s.status = Status{State: StateStopped, Message: "Sandbox stopped", Since: time.Now(), AppOnly: cfg.AppOnly}
+	s.life, s.endLife = context.WithCancel(context.Background())
 	rec.SetOwnerLookup(s.owners.lookup)
 	return s
+}
+
+// Shutdown aborts a start in progress because the application is closing:
+// Stop then runs at once instead of waiting for Android to finish booting
+// (which can take minutes). The sandbox cannot be started afterwards.
+func (s *Sandbox) Shutdown() { s.endLife() }
+
+// withLife returns ctx, additionally cancelled by Shutdown.
+func (s *Sandbox) withLife(ctx context.Context) (context.Context, context.CancelFunc) {
+	c, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.life, cancel)
+	if s.life.Err() != nil {
+		cancel() // already shut down (AfterFunc would cancel asynchronously)
+	}
+	return c, func() { stop(); cancel() }
 }
 
 // Status returns the current status.
@@ -249,6 +268,8 @@ func (s *Sandbox) Start(ctx context.Context, profileName string) error {
 }
 
 func (s *Sandbox) start(ctx context.Context, profileName string, newSession bool) error {
+	ctx, endStart := s.withLife(ctx)
+	defer endStart()
 	if profileName == "" {
 		profileName = vm.ProfileX86_64
 	}
@@ -419,68 +440,134 @@ func isDigits(s string) bool {
 	return true
 }
 
-// connectDevice connects ADB through the sandbox network and waits for boot.
+// connectDevice connects ADB through the sandbox network, waits for boot and
+// makes adbd run as root where the image allows it.
 func (s *Sandbox) connectDevice(ctx context.Context, m *vm.Machine) error {
-	return s.connectDeviceTry(ctx, m, true)
-}
-
-func (s *Sandbox) connectDeviceTry(ctx context.Context, m *vm.Machine, tryRoot bool) error {
-	var conn *adb.Conn
-	var lastErr error
-	for conn == nil {
-		select {
-		case <-m.Exited():
-			return fmt.Errorf("the virtual machine stopped during boot: %s", m.Stderr())
-		default:
-		}
-		actx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		c, err := adb.Connect(actx, adb.Config{
-			Key:  s.cfg.ADBKey,
-			Dial: func(ctx context.Context) (net.Conn, error) { return s.gw.Stack().DialGuest(ctx, 5555) },
-		})
-		cancel()
-		if err == nil {
-			conn = c
-			break
-		}
-		lastErr = err
-		if ctx.Err() != nil {
-			return fmt.Errorf("could not connect to Android (ADB): %v", lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("could not connect to Android (ADB): %v", lastErr)
-		case <-time.After(2 * time.Second):
-		}
-	}
-	dev := device.New(conn)
-	if err := dev.WaitBootCompleted(ctx, 2*time.Second); err != nil {
-		conn.Close()
+	conn, dev, err := s.connectADB(ctx, m)
+	if err != nil {
 		return err
 	}
-	// Inspection needs root (system CA store, clock). On userdebug images adbd
-	// can restart itself as root; it drops the connection, so reconnect.
-	if out, _, err := dev.Run(ctx, "id -u"); tryRoot && err == nil && strings.TrimSpace(out) != "0" {
-		// adbd restarts itself and may drop the transport before answering, so
-		// the reply is informational: always reconnect through the retry loop.
-		msg, rerr := conn.Root(ctx)
-		conn.Close()
-		s.vmLog.Info("adb root requested", "message", msg, "err", rerr)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(3 * time.Second):
+	link := adbLink{conn, dev}
+	// Inspection needs root (system CA store, clock, firewall). On userdebug
+	// images adbd restarts itself as root when asked. It answers, then exits
+	// and is restarted by init — so a quick reconnect can still reach the old,
+	// non-root adbd, whose connection then dies mid-command. Reconnect until
+	// the new adbd reports uid 0.
+	if !isRootShell(ctx, dev) {
+		link, err = becomeRoot(ctx, link, rootSteps[adbLink]{
+			request: func(l adbLink) (refused bool) {
+				msg, rerr := l.conn.Root(ctx)
+				s.vmLog.Info("adb root requested", "message", msg, "err", rerr)
+				return errors.Is(rerr, adb.ErrRootRefused)
+			},
+			drop: func(l adbLink) { l.conn.Close() },
+			connect: func() (adbLink, error) {
+				c, d, err := s.connectADB(ctx, m)
+				return adbLink{c, d}, err
+			},
+			isRoot:   func(l adbLink) bool { return isRootShell(ctx, l.dev) },
+			interval: 2 * time.Second, rerequest: 20 * time.Second, giveUp: 90 * time.Second,
+		})
+		if err != nil {
+			return err
 		}
-		return s.connectDeviceTry(ctx, m, false)
 	}
-	if out, _, err := dev.Run(ctx, "id -u"); err == nil && strings.TrimSpace(out) != "0" {
-		s.log.Warn("adbd is not running as root; HTTPS payload inspection and clock sync are unavailable")
+	conn, dev = link.conn, link.dev
+	if !isRootShell(ctx, dev) {
+		s.log.Warn("adbd is not running as root; HTTPS payload inspection, clock sync and the app-only firewall are unavailable")
 	}
 	s.mu.Lock()
 	s.adbConn, s.dev = conn, dev
 	s.mu.Unlock()
 	s.log.Info("Android is available", "device", conn.Info().State)
 	return nil
+}
+
+type adbLink struct {
+	conn *adb.Conn
+	dev  *device.Device
+}
+
+// rootSteps are the operations becomeRoot drives (injected for tests).
+type rootSteps[L any] struct {
+	request   func(L) bool      // ask adbd (through L) to restart as root; true = refused for good
+	drop      func(L)           // close a connection
+	connect   func() (L, error) // open a new connection (waits for boot)
+	isRoot    func(L) bool
+	interval  time.Duration // between reconnects
+	rerequest time.Duration // ask again when adbd did not restart within this
+	giveUp    time.Duration // then continue without root
+}
+
+// becomeRoot asks adbd to restart as root and reconnects until the
+// connection is served by a root adbd. The request is repeated if adbd has
+// not restarted in time (it may have been lost); after giveUp, or when adbd
+// refuses outright, the connection is returned as is.
+func becomeRoot[L any](ctx context.Context, cur L, st rootSteps[L]) (L, error) {
+	start := time.Now()
+	if st.request(cur) {
+		return cur, nil // production build: adbd stays as it is, and so does the connection
+	}
+	requested := time.Now()
+	st.drop(cur)
+	for {
+		select {
+		case <-ctx.Done():
+			var zero L
+			return zero, ctx.Err()
+		case <-time.After(st.interval):
+		}
+		next, err := st.connect()
+		if err != nil {
+			return next, err
+		}
+		if st.isRoot(next) || time.Since(start) >= st.giveUp {
+			return next, nil
+		}
+		if time.Since(requested) >= st.rerequest {
+			st.request(next)
+			requested = time.Now()
+		}
+		st.drop(next) // the previous adbd, still shutting down (or the request was lost)
+	}
+}
+
+func isRootShell(ctx context.Context, dev *device.Device) bool {
+	out, _, err := dev.Run(ctx, "id -u")
+	return err == nil && strings.TrimSpace(out) == "0"
+}
+
+// connectADB connects to adbd over the sandbox network and waits until
+// Android has booted.
+func (s *Sandbox) connectADB(ctx context.Context, m *vm.Machine) (*adb.Conn, *device.Device, error) {
+	var lastErr error
+	for {
+		select {
+		case <-m.Exited():
+			return nil, nil, fmt.Errorf("the virtual machine stopped during boot: %s", m.Stderr())
+		default:
+		}
+		actx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		conn, err := adb.Connect(actx, adb.Config{
+			Key:  s.cfg.ADBKey,
+			Dial: func(ctx context.Context) (net.Conn, error) { return s.gw.Stack().DialGuest(ctx, 5555) },
+		})
+		cancel()
+		if err == nil {
+			dev := device.New(conn)
+			if err := dev.WaitBootCompleted(ctx, 2*time.Second); err != nil {
+				conn.Close()
+				return nil, nil, err
+			}
+			return conn, dev, nil
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, nil, fmt.Errorf("could not connect to Android (ADB): %v", lastErr)
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // provisionBase applies persistent settings suited to an inspection sandbox.
@@ -962,6 +1049,8 @@ func (s *Sandbox) RestoreSnapshot(ctx context.Context, tag string) error {
 	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
+	ctx, endRestore := s.withLife(ctx)
+	defer endRestore()
 	m, err := s.runningMachine()
 	if err != nil {
 		return err

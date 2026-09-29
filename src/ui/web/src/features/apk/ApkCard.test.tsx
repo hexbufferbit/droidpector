@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import type { APKEntry } from '../../api/types';
+import type { APKEntry, Status } from '../../api/types';
+import { appStore } from '../../state/app';
 import { ApkCard } from './ApkCard';
 import { firstApk, isApkFile } from './files';
 
@@ -17,15 +18,27 @@ const entry: APKEntry = {
 
 describe('ApkCard', () => {
   it('shows the analysis, the translation badge and warnings', () => {
-    render(<ApkCard upload={{ fileName: 'shop.apk', size: entry.size, loaded: entry.size, phase: 'starting', entry }} />);
+    render(<ApkCard upload={{ fileName: 'shop.apk', size: entry.size, loaded: entry.size, phase: 'analyzed', entry }} />);
     expect(screen.getByText('Shop')).toBeTruthy();
     expect(screen.getByText('com.example.shop')).toBeTruthy();
     expect(screen.getByText('24 / 34')).toBeTruthy();
     expect(screen.getByText('arm64-v8a')).toBeTruthy();
     expect(screen.getByText('runs through ARM translation')).toBeTruthy();
     expect(screen.getByText('The app is debuggable.').closest('li')?.className).toBe('sev-warning');
-    expect(screen.getByText(/Installing and launching/)).toBeTruthy();
     expect(screen.queryByText(/cannot be installed/)).toBeNull();
+  });
+
+  it('reports install progress by itself while Android boots', () => {
+    appStore.set({ status: { state: 'booting', since: new Date(Date.now() - 30_000).toISOString(), accelerated: true } as Status });
+    render(<ApkCard upload={{ fileName: 'shop.apk', size: entry.size, loaded: entry.size, phase: 'starting', entry }} />);
+    expect(screen.getByText(/Step 1 of 3: Booting Android/)).toBeTruthy();
+    const bar = screen.getByRole('progressbar');
+    const pct = Number(bar.getAttribute('aria-valuenow'));
+    expect(pct).toBeGreaterThan(5);
+    expect(pct).toBeLessThan(65);
+    expect(screen.getByText(`${pct}%`)).toBeTruthy();
+    // The analysis is collapsed so the card does not cover the phone.
+    expect((screen.getByText('24 / 34').closest('details') as HTMLDetailsElement).open).toBe(false);
   });
 
   it('blocks installation when there are error problems', () => {
@@ -33,7 +46,7 @@ describe('ApkCard', () => {
     render(<ApkCard upload={{ fileName: 'bad.apk', size: 10, loaded: 10, phase: 'analyzed', entry: bad }} />);
     expect(screen.getByText('The file is not a ZIP archive.').closest('li')?.className).toBe('sev-error');
     expect(screen.getByText(/cannot be installed/)).toBeTruthy();
-    expect(screen.queryByText(/Installing and launching/)).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
   it('shows upload progress', () => {
