@@ -25,13 +25,12 @@ make installer      # build/droidpector-Setup-x64.exe (single self-contained ins
 make testapp        # build/testapp/TestApp.apk
 ```
 
-The production pipeline is `windows-x64` in `.github/workflows/ci.yml`; its
-package job only runs after build, unit, integration, VM integration and
-static-analysis jobs pass, and it uploads:
+Releases are built locally (`make lint test e2e test-vm portable`) and
+published as GitHub releases; the artifacts are:
 
 ```
+build/droidpector-portable-x64.zip   (release asset)
 build/droidpector.exe
-build/droidpector-Setup-x64.exe
 build/debug/droidpector.exe
 ```
 
@@ -60,7 +59,7 @@ build/runtime/
 ## Notes for macOS development machines
 
 - Homebrew's `makensis` 3.13 aborts with `std::bad_alloc` on macOS 27 when
-  ASLR is enabled. Build the installer on Linux/Windows (CI), or run it under
-  `lldb --batch -o "run <args>" -- makensis` locally.
+  ASLR is enabled; run it under `lldb --batch -o "run <args>" -- makensis`
+  (only needed for the optional NSIS installer).
 - The x86_64 Android guest runs under TCG on Apple Silicon (≈4 minutes to a
   ready sandbox); use a Linux/KVM or Windows/WHPX machine for fast iterations.

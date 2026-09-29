@@ -60,7 +60,8 @@ traffic. Controls, by threat:
 - Runtime inputs (QEMU, Android image) are pinned by SHA-256 in
   `tools/runtime/prepare.sh`; the repacked system image is verified
   byte-identical to the original, and its hash is recorded in `runtime.json`.
-- CI runs `govulncheck`, `go vet`, `staticcheck` and parser fuzzing.
+- `make lint` runs `go vet` and `staticcheck`; `govulncheck` and parser
+  fuzzing are part of the release checklist.
 
 ## Reporting
 

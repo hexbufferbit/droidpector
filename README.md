@@ -80,9 +80,8 @@ See [TESTING.md](TESTING.md).
 
 ## Package
 
-`make installer` produces the NSIS installer; CI (`.github/workflows/ci.yml`)
-runs Build → Unit → Integration → Static analysis → Package → E2E and a
-clean-Windows install/boot/uninstall smoke test. See [PACKAGING.md](PACKAGING.md).
+`make portable` produces the portable zip (the release artifact); builds are
+made locally and published as GitHub releases. See [PACKAGING.md](PACKAGING.md).
 
 ## Architecture overview
 

@@ -75,7 +75,6 @@ droidpector-Setup-x64.exe /S [/D=C:\Path]
 
 ## Code signing
 
-Not configured. For public releases sign `droidpector.exe`, the
-uninstaller and the installer (Authenticode, `signtool` in the package job,
-certificate from CI secrets) — unsigned installers trigger SmartScreen
-warnings.
+Not configured. For public releases sign `droidpector.exe` (`make sign
+SIGN_PFX=… SIGN_PASS=…`) — unsigned executables trigger SmartScreen and
+antivirus warnings.

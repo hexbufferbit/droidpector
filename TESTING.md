@@ -14,7 +14,7 @@ mappings.
 | UI | `cd src/ui/web && npm test` | components, keysym mapping, formatters, hex dump, JSON tree, virtual list math |
 | UI E2E | `make e2e` | Playwright against the real core (devserver): request appears → details → Copy as cURL, filters, JSON/image viewers, WebSocket messages, encrypted TLS, replay, 500-row virtualization, HAR export, raw-TCP protocol label, app-only toggle round-trip |
 | VM integration | `make test-vm` | real QEMU + Android 13 with the portrait phone display: boot, ADB (root), CA install, TestApp install/launch, HTTPS event attributed to the TestApp package, app-only firewall (system-uid connection rejected, `blockedFlows` grows, toggle off/on), rotation (`user_rotation`), button clicks through the display stream in landscape and portrait (validates the UI's pointer mapping), replay, crash (QEMU killed) → recovery with the app preserved, quick-start restart |
-| Windows smoke | `tests/e2e/windows-smoke.ps1` (CI) | offline silent install of the single installer on a clean runner, files/registry, bundled QEMU runs, core API/auth, Android boots, VM dies with the app, clean silent uninstall |
+| Windows smoke | `tests/e2e/windows-smoke.ps1` (run on a Windows machine) | offline silent install of the single installer on a clean runner, files/registry, bundled QEMU runs, core API/auth, Android boots, VM dies with the app, clean silent uninstall |
 
 ## Test matrix coverage
 
@@ -46,5 +46,5 @@ Linux CI enables `/dev/kvm`; on macOS/Apple Silicon the guest runs under TCG
 ## Static analysis
 
 `make lint`: gofmt, `go vet` (host and `GOOS=windows`), staticcheck, UI
-typecheck and ESLint. CI additionally runs `govulncheck` and 30-second fuzz
-smoke runs for every parser.
+typecheck and ESLint. Before a release also run `govulncheck ./...` and the
+fuzz targets (`go test -fuzz=… -fuzztime=30s`) for the parsers.
