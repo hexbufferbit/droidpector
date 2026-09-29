@@ -72,6 +72,7 @@ func (g *Gateway) Replay(ctx context.Context, rr ReplayRequest) (*model.Event, e
 	}
 	var connStart, connDone time.Time
 	var remote string
+	var local net.Addr
 	tt := &traceTimes{}
 	t := &http.Transport{
 		DisableCompression: true,
@@ -84,6 +85,7 @@ func (g *Gateway) Replay(ctx context.Context, rr ReplayRequest) (*model.Event, e
 			connDone = time.Now()
 			if c != nil {
 				remote = c.RemoteAddr().String()
+				local = c.LocalAddr()
 			}
 			return c, err
 		},
@@ -144,6 +146,7 @@ func (g *Gateway) Replay(ctx context.Context, rr ReplayRequest) (*model.Event, e
 			ALPN: resp.TLS.NegotiatedProtocol, ServerCerts: certInfos(resp.TLS.PeerCertificates)}
 	}
 	e.Conn = &model.Conn{ID: "replay", RemoteAddr: remote}
+	setEgress(e.Conn, local)
 	e.DurationMs = ms(end.Sub(start))
 	e.State = model.StateComplete
 	if cerr != nil {

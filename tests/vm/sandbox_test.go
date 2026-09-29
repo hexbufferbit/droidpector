@@ -61,6 +61,9 @@ func newHarness(t *testing.T, dataDir string) *harness {
 	cfg.HostMappings = []string{testHost + "=" + srv.HTTPSAddr}
 	cfg.ExtraRootsPEM = caFile
 	cfg.BootTimeoutSec = 3600
+	if sn := os.Getenv("APKINSPECTOR_SUBNET"); sn != "" { // e.g. 172.31.254.0/24: non-default guest network
+		cfg.SandboxSubnet = sn
+	}
 	if runtime.GOARCH == "arm64" { // x86 guest emulated on an ARM host
 		cfg.CPUs = 4
 	}

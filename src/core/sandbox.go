@@ -278,6 +278,7 @@ func (s *Sandbox) start(ctx context.Context, profileName string, newSession bool
 		st.Runtime, st.Android, st.SessionID = p.Name, p.Android, s.rec.Session()
 		st.Warnings = nil
 	})
+	s.checkSubnet()
 
 	snapshot := ""
 	if s.cfg.UseBootSnapshot && s.hasBootSnapshot(p) {
@@ -869,13 +870,38 @@ func (s *Sandbox) hasBootSnapshot(p vm.Profile) bool {
 	var m struct {
 		MemoryMB int    `json:"memoryMB"`
 		ISO      string `json:"iso"`
+		Subnet   string `json:"subnet"`
 	}
-	// A snapshot is only valid for the same memory size and runtime image.
-	return json.Unmarshal(b, &m) == nil && m.MemoryMB == s.cfg.MemoryMB && m.ISO == p.ISO
+	// A snapshot is only valid for the same memory size, runtime image and
+	// network plan (the restored guest keeps its IP configuration). Markers
+	// from before the subnet was recorded were taken on the default plan.
+	if json.Unmarshal(b, &m) != nil {
+		return false
+	}
+	if m.Subnet == "" {
+		m.Subnet = network.DefaultAddressing().Subnet.String()
+	}
+	return m.MemoryMB == s.cfg.MemoryMB && m.ISO == p.ISO && m.Subnet == s.subnet().String()
+}
+
+func (s *Sandbox) subnet() netip.Prefix { return s.gw.Stack().Addressing().Subnet }
+
+// checkSubnet warns when a network the host reaches (typically a VPN that
+// connected after droidpector started) overlaps the sandbox subnet.
+func (s *Sandbox) checkSubnet() {
+	routes, err := network.HostRoutes()
+	if err != nil {
+		return
+	}
+	ch, err := network.ChooseAddressing(s.subnet().String(), routes)
+	if err == nil && ch.Warning() != "" {
+		s.log.Warn("sandbox subnet conflict", "subnet", s.subnet(), "routes", fmt.Sprint(ch.Conflicts))
+		s.warn(ch.Warning())
+	}
 }
 
 func (s *Sandbox) markBootSnapshot(p vm.Profile) {
-	b, _ := json.Marshal(map[string]any{"memoryMB": s.cfg.MemoryMB, "iso": p.ISO, "created": time.Now()})
+	b, _ := json.Marshal(map[string]any{"memoryMB": s.cfg.MemoryMB, "iso": p.ISO, "subnet": s.subnet().String(), "created": time.Now()})
 	os.WriteFile(s.bootMarker(p), b, 0o600)
 }
 

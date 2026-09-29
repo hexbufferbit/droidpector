@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
 )
@@ -29,6 +30,10 @@ type Config struct {
 	MaxBodyMB     int      `json:"maxBodyMB"`
 	HostMappings  []string `json:"hostMappings"`  // "host=ip:port" (advanced / tests)
 	ExtraRootsPEM string   `json:"extraRootsPem"` // path to extra upstream trust anchors (corporate proxies, tests)
+	// SandboxSubnet is the guest network: "auto" picks one that does not
+	// overlap the host's routes (VPNs, LANs), or an IPv4 CIDR such as
+	// "172.31.254.0/24".
+	SandboxSubnet string `json:"sandboxSubnet"`
 
 	// Storage
 	KeepSessions int `json:"keepSessions"` // unsaved sessions retained
@@ -44,7 +49,7 @@ func DefaultConfig() Config {
 	return Config{
 		MemoryMB: 4096, CPUs: 4, Accelerator: "auto", DefaultRuntime: "x86_64", BootTimeoutSec: 600,
 		AutoRestart: true, UseBootSnapshot: true,
-		InspectHTTPS: true, AppOnly: true, BlockQUIC: true, MaxBodyMB: 10,
+		InspectHTTPS: true, AppOnly: true, BlockQUIC: true, MaxBodyMB: 10, SandboxSubnet: "auto",
 		KeepSessions: 50, KeepDays: 30, WriteQueue: 8192,
 		LogLevel: "INFO",
 	}
@@ -62,6 +67,15 @@ func (c *Config) Validate() error {
 	case "x86_64", "arm64":
 	default:
 		errs = append(errs, fmt.Errorf("defaultRuntime %q is not x86_64 or arm64", c.DefaultRuntime))
+	}
+	if c.SandboxSubnet == "" {
+		c.SandboxSubnet = "auto"
+	}
+	if c.SandboxSubnet != "auto" {
+		if p, err := netip.ParsePrefix(c.SandboxSubnet); err != nil || !p.Addr().Is4() || p.Bits() < 16 || p.Bits() > 28 {
+			errs = append(errs, fmt.Errorf("sandboxSubnet %q must be \"auto\" or an IPv4 network between /16 and /28, e.g. 172.31.254.0/24", c.SandboxSubnet))
+			c.SandboxSubnet = "auto"
+		}
 	}
 	if _, err := ParseLevel(c.LogLevel); err != nil {
 		errs = append(errs, err)

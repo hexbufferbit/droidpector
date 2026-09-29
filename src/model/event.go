@@ -112,6 +112,8 @@ type Conn struct {
 	ClientAddr string `json:"clientAddr"`           // guest ip:port
 	ServerAddr string `json:"serverAddr"`           // original destination ip:port
 	RemoteAddr string `json:"remoteAddr,omitempty"` // actual upstream peer
+	LocalAddr  string `json:"localAddr,omitempty"`  // host side of the upstream socket
+	Interface  string `json:"interface,omitempty"`  // host network interface it left through (e.g. a VPN adapter)
 	Reused     bool   `json:"reused,omitempty"`
 	BytesUp    int64  `json:"bytesUp"`
 	BytesDown  int64  `json:"bytesDown"`

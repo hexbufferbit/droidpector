@@ -234,6 +234,10 @@ export interface ConnInfo {
   clientAddr: string;
   serverAddr: string;
   remoteAddr?: string;
+  /** Host side of the upstream socket. */
+  localAddr?: string;
+  /** Host network interface the connection left through (e.g. a VPN adapter). */
+  interface?: string;
   reused?: boolean;
   bytesUp: number;
   bytesDown: number;

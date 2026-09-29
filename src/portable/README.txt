@@ -33,6 +33,19 @@ sandbox does both by design). If your antivirus quarantines droidpector.exe:
    CHECKSUMS.txt so you can verify it is the original build.
 Nothing in droidpector modifies Windows, the registry or other programs.
 
+Apps that need a VPN (e.g. OpenVPN)
+-----------------------------------
+The sandbox sends the app's traffic through Windows like any other program,
+so a VPN connected on Windows is used automatically. Connect the VPN before
+starting droidpector: the sandbox then picks an internal network range that
+does not collide with the VPN's networks (each request's "Connection" tab
+shows the Windows network interface it used, e.g. the VPN adapter).
+Servers whose HTTPS certificate Windows does not trust (an organization's
+internal CA) keep working but are shown encrypted. To inspect them, copy the
+organization's CA certificate (.crt/.cer/.pem) into data\trusted-ca and
+restart droidpector. If needed, set "sandboxSubnet" in data\config.json to
+an unused range such as "172.31.254.0/24".
+
 First start
 -----------
 The first start boots Android completely (a few minutes). When you stop the

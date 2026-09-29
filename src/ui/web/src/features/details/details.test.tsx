@@ -85,6 +85,9 @@ describe('DetailsView', () => {
     expect(screen.getByText('CN=droidpector Test Server CA')).toBeTruthy();
     expect(screen.getByText('Yes — decrypted by the sandbox')).toBeTruthy();
     expect(screen.getByText('10.0.2.15:18749')).toBeTruthy();
+    // Which host interface (e.g. the VPN adapter) the connection used.
+    expect(screen.getByText('OpenVPN TAP-Windows6')).toBeTruthy();
+    expect(screen.getByText(/10\.8\.0\.6:51330/)).toBeTruthy();
   });
 
   it('renders DNS details', () => {

@@ -151,6 +151,15 @@ export function ConnectionTab({ d }: { d: EventDetail }) {
           <dd className="mono">{c.serverAddr || '—'}</dd>
           <dt>Remote address</dt>
           <dd className="mono">{c.remoteAddr || '—'}</dd>
+          {(c.interface || c.localAddr) && (
+            <>
+              <dt>Host interface</dt>
+              <dd>
+                {c.interface || 'Unknown'}
+                {c.localAddr && <span className="mono muted"> · {c.localAddr}</span>}
+              </dd>
+            </>
+          )}
           {c.reused && (
             <>
               <dt>Reused</dt>

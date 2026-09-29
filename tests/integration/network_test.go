@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"strings"
@@ -121,7 +122,7 @@ type env struct {
 	rawSrv net.Listener
 }
 
-func newEnv(t *testing.T, maxBody int64) *env {
+func newEnv(t *testing.T, maxBody int64, extra ...network.HostMapping) *env {
 	t.Helper()
 	srv, err := testserver.Start("", "", []string{httpsHost})
 	if err != nil {
@@ -159,11 +160,11 @@ func newEnv(t *testing.T, maxBody int64) *env {
 	}
 	gw, err := network.New(network.Options{
 		Policy: network.DefaultPolicy(),
-		Mappings: []network.HostMapping{
+		Mappings: append([]network.HostMapping{
 			{Host: httpsHost, Target: srv.HTTPSAddr},
 			{Host: httpHost, Target: srv.HTTPAddr},
 			{Host: rawHost, Target: raw.Addr().String()},
-		},
+		}, extra...),
 		ExtraRoots:   []*x509.Certificate{srv.CA},
 		MaxBodyBytes: maxBody,
 		SniffTimeout: 300 * time.Millisecond,
@@ -279,6 +280,11 @@ func TestPlainHTTPGetIsCaptured(t *testing.T) {
 	}
 	if ev.Timing == nil || ev.Timing.Wait < 0 || ev.Timing.Connect < 0 || ev.Conn == nil || ev.Conn.ClientAddr == "" {
 		t.Fatalf("timing/conn: %+v %+v", ev.Timing, ev.Conn)
+	}
+	// The host side of the upstream socket and the interface Windows routed
+	// it through (a VPN adapter when a VPN covers the destination).
+	if !strings.HasPrefix(ev.Conn.LocalAddr, "127.0.0.1:") || ev.Conn.Interface == "" {
+		t.Fatalf("egress not recorded: %+v", ev.Conn)
 	}
 	if ev.DurationMs <= 0 {
 		t.Fatal("duration not recorded")
@@ -555,6 +561,73 @@ func TestCertificatePinningFallsBackToPassthrough(t *testing.T) {
 	if !pt.Encrypted || pt.TLS.Intercepted || pt.Method != "" {
 		t.Fatalf("passthrough event: %+v", pt)
 	}
+}
+
+// Servers behind a corporate VPN often use an internal CA that Windows does
+// not trust (the app ships or trusts it itself), or are reached by IP without
+// SNI. The sandbox must not break them: it passes them through uninspected.
+func TestUntrustedUpstreamCertificateIsPassedThrough(t *testing.T) {
+	internal := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "internal-ok")
+	}))
+	t.Cleanup(internal.Close)
+	const internalHost = "intranet.corp.test"
+	e := newEnv(t, 0, network.HostMapping{Host: internalHost, Target: internal.Listener.Addr().String()})
+	appRoots := x509.NewCertPool() // the app trusts the organization's CA itself
+	appRoots.AddCert(internal.Certificate())
+	appRoots.AddCert(e.ca.Certificate())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ips, err := e.guest.Resolver().LookupNetIP(ctx, "ip4", internalHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := netip.AddrPortFrom(ips[0], 443)
+	get := func(serverName string, skipVerify bool) string {
+		t.Helper()
+		raw, err := e.guest.DialTCP(ctx, dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer raw.Close()
+		c := tls.Client(raw, &tls.Config{ServerName: serverName, RootCAs: appRoots, InsecureSkipVerify: skipVerify, NextProtos: []string{"http/1.1"}})
+		c.SetDeadline(time.Now().Add(15 * time.Second))
+		if err := c.HandshakeContext(ctx); err != nil {
+			t.Fatalf("app handshake (%q): %v", serverName, err)
+		}
+		if skipVerify == false && c.ConnectionState().PeerCertificates[0].Equal(internal.Certificate()) == false {
+			t.Fatal("the app must see the real server certificate, not an interception certificate")
+		}
+		io.WriteString(c, "GET / HTTP/1.1\r\nHost: "+internalHost+"\r\nConnection: close\r\n\r\n")
+		b, _ := io.ReadAll(c)
+		return string(b)
+	}
+
+	// SNI "example.com" matches the test certificate, which Windows does not trust.
+	if body := get("example.com", false); !strings.HasSuffix(body, "internal-ok") {
+		t.Fatalf("response through passthrough: %q", body)
+	}
+	ev := e.rec.wait(t, "untrusted passthrough", func(ev *model.Event) bool {
+		return ev.Kind == model.KindTLS && ev.Host == "example.com" && ev.State == model.StateComplete
+	})
+	if ev.Error != "" || ev.TLS == nil || ev.TLS.Intercepted || !strings.Contains(ev.TLS.PassthroughReason, "not trusted by Windows") ||
+		!strings.Contains(ev.TLS.PassthroughReason, network.TrustedCAFolder) {
+		t.Fatalf("event: %+v %+v", ev, ev.TLS)
+	}
+	// The decision is remembered: the next connection skips the attempt.
+	if body := get("example.com", false); !strings.HasSuffix(body, "internal-ok") {
+		t.Fatalf("second connection: %q", body)
+	}
+
+	// No SNI at all (the app connects to an IP address).
+	if body := get("", true); !strings.HasSuffix(body, "internal-ok") {
+		t.Fatalf("no-SNI connection: %q", body)
+	}
+	e.rec.wait(t, "no-SNI passthrough", func(ev *model.Event) bool {
+		return ev.Kind == model.KindTLS && ev.State == model.StateComplete && ev.TLS != nil && ev.TLS.SNI != "example.com" &&
+			!ev.TLS.Intercepted && ev.Error == "" && ev.ResponseSize > 0
+	})
 }
 
 func TestSandboxPolicyProtectsHost(t *testing.T) {

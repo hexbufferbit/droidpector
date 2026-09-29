@@ -40,6 +40,7 @@ export function OverviewTab({ d }: { d: EventDetail }) {
       <Row label="Kind">{`${d.kind} · ${d.category}`}</Row>
       <Row label="Content type">{d.mime}</Row>
       <Row label="Remote address">{d.conn?.remoteAddr || d.conn?.serverAddr}</Row>
+      <Row label="Host interface">{d.conn?.interface}</Row>
       <Row label="Initiator">
         {d.initiator === 'replay' ? (
           <>

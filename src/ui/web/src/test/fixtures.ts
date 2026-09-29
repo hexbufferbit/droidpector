@@ -44,7 +44,7 @@ export const httpGet: EventDetail = {
   responseBody: { hash: 'h', size: 49, stored: 49, mime: 'application/json' },
   timing: { blocked: 0.015, dns: -1, connect: -1, tls: -1, send: 0.02, wait: 0.193, receive: 0.245 },
   tls: { sni: 'api.example.test', version: 'TLS 1.3', cipherSuite: 'TLS_AES_128_GCM_SHA256', alpn: 'h2', clientAlpn: ['h2', 'http/1.1'], intercepted: true, serverCerts: [cert] },
-  conn: { id: 'c1', clientAddr: '10.0.2.15:18749', serverAddr: '198.18.0.1:443', remoteAddr: '127.0.0.1:51330', bytesUp: 0, bytesDown: 0 },
+  conn: { id: 'c1', clientAddr: '10.0.2.15:18749', serverAddr: '198.18.0.1:443', remoteAddr: '127.0.0.1:51330', localAddr: '10.8.0.6:51330', interface: 'OpenVPN TAP-Windows6', bytesUp: 0, bytesDown: 0 },
   url: 'https://api.example.test/test/get?page=1&q=hello%20world',
   queryParams: [
     { name: 'page', value: '1' },

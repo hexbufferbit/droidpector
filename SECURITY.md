@@ -10,6 +10,7 @@ traffic. Controls, by threat:
 | APK reads/writes Windows files | No shared folders, 9p, virtiofs or USB passthrough are configured. The only host files the VM opens are the read-only system image and its own data disk. |
 | Guest reaches host services | The guest's only NIC ends in the core's user-mode stack. The gateway IP is not an alias of host loopback; loopback, link-local (cloud metadata) and multicast destinations are denied; optional LAN block. Unknown ports on gateway IPs are reset. |
 | QEMU escape | QEMU is an unmodified upstream build, runs as the (non-admin) user, with a minimal device set (`-nodefaults`), no user networking, and is killed with the app (Job Object). |
+| Interception weakens the app's TLS | Interception happens only when the upstream certificate verifies against the Windows store (plus `trusted-ca`). Otherwise the connection is passed through untouched and the app's own verification applies: the sandbox never presents a trusted certificate for a server it could not verify itself. |
 | Guest reaches QEMU control | QMP/serial/NIC channels are client connections from QEMU to listeners owned by the core; VNC listens on loopback with a random per-boot password. |
 
 ## Hostile traffic and files

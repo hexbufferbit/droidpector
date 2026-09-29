@@ -3,7 +3,7 @@
 ## Topology
 
 ```
-Android guest (10.0.2.15)
+Android guest (10.0.2.15 — the subnet is chosen at startup, see "VPNs")
   virtio-net ──(QEMU "socket" netdev: 32-bit BE length + Ethernet frame)──► core
                                                                           │
                                          gVisor netstack (user mode) ◄────┘
@@ -25,6 +25,9 @@ Android guest (10.0.2.15)
    CA active? ALPN is HTTP? host not marked pinned?
      yes → upstream TLS handshake FIRST (learn ALPN) → client handshake
            with leaf for SNI → HTTP/1.1 or HTTP/2 proxy (capture)
+           upstream handshake fails (certificate not trusted by Windows,
+           client certificate required, unsupported TLS) → re-dial and
+           passthrough; the app decides trust, never the sandbox
      no  → passthrough relay + TLS event (SNI, bytes, "encrypted")
    client rejects our certificate → host marked pinned for this boot,
    event "HTTPS encrypted traffic detected. Payload inspection unavailable…"
@@ -53,6 +56,35 @@ mark the network as limited. The app is allowed when it is installed
 rejected-packet counter is `Status.blockedFlows`. DNS cannot be attributed
 per app (Android resolves from a system process), so DNS queries of blocked
 apps still show as DNS events.
+
+## VPNs and corporate networks
+
+Upstream connections are plain host sockets (no interface binding), so the
+Windows routing table decides where they go: a VPN client (OpenVPN, WireGuard,
+corporate agents) that covers a destination carries the app's traffic too, and
+names are resolved by the Windows resolver (VPN DNS and NRPT split-DNS rules
+apply). Each event's connection records the host side of the upstream socket
+(`Conn.localAddr`) and the Windows interface it left through
+(`Conn.interface`); for failed connects the would-be route is recorded.
+
+Three things would otherwise break VPN-only apps:
+
+- **Subnet overlap.** The guest treats its own subnet as on-link, so servers
+  inside it never reach the gateway. At startup the subnet is chosen from
+  10.0.2.0/24, 172.31.254.0/24, 192.168.254.0/24, 10.254.254.0/24,
+  100.127.254.0/24, 172.16.254.0/24 — the first that overlaps no host route
+  (Windows `GetIpForwardTable2`; routes shorter than /8, such as a full-tunnel
+  VPN's 0.0.0.0/1 + 128.0.0.0/1, do not count). Config `sandboxSubnet`
+  ("auto" or an IPv4 CIDR /16–/28) overrides it. Every start re-checks the
+  routes and warns if a VPN connected later now overlaps. The quick-start
+  snapshot records its subnet and is only restored on the same one.
+- **Internal CAs.** Upstream certificates are verified against the Windows
+  store (enterprise CAs deployed to Windows are honoured) plus the
+  certificates in `<data>/trusted-ca` (PEM or DER). If verification fails, or
+  the server wants a client certificate, the connection is re-opened and passed
+  through with the reason shown, and the host is remembered for this boot.
+  Connections without SNI (by IP) are verified against the IP address.
+- **Proxies.** Not applied: connections go direct over the routed interface.
 
 ## Raw (non-HTTP) streams
 
@@ -166,8 +198,10 @@ sorting + paging 100k rows takes ~4 ms (benchmark in `src/query`).
 ## Known limitations
 
 - QUIC/HTTP3 is blocked by default so apps fall back to TCP (configurable).
-- Apps that pin certificates or ship their own trust store are shown as
-  encrypted connections (metadata only) — by design.
+- Apps that pin certificates or ship their own trust store, and servers whose
+  certificate Windows does not trust, are shown as encrypted connections
+  (metadata only) — by design.
+- System HTTP proxies / PAC files are not applied to sandbox traffic.
 - HTTP/2 WebSockets (RFC 8441) and HTTP/2 cleartext (h2c) are relayed
   opaquely.
 - Header order/case of HTTP/1 requests is normalized (canonical names,

@@ -94,6 +94,32 @@ func NewApp(version string, paths platform.Paths, cfg platform.Config, logs *pla
 		}
 		netOpts.ExtraRoots = roots
 	}
+	// Organization CAs (e.g. for servers behind a corporate VPN) dropped into
+	// <data>/trusted-ca let the sandbox inspect those servers. Without them,
+	// such connections are passed through uninspected (never broken).
+	caDir := filepath.Join(paths.DataDir, TrustedCADirName)
+	os.MkdirAll(caDir, 0o700)
+	orgRoots, warns := loadCertsDir(caDir)
+	for _, w := range warns {
+		logs.App.Warn("trusted CA folder", "problem", w)
+	}
+	if len(orgRoots) > 0 {
+		logs.App.Info("trusting organization CAs for upstream servers", "count", len(orgRoots), "dir", caDir)
+		netOpts.ExtraRoots = append(netOpts.ExtraRoots, orgRoots...)
+	}
+	routes, err := network.HostRoutes()
+	if err != nil {
+		logs.Network.Warn("could not read the host routing table; using the default sandbox subnet unless configured", "err", err)
+	}
+	subnet, err := network.ChooseAddressing(cfg.SandboxSubnet, routes)
+	if err != nil {
+		return nil, err
+	}
+	netOpts.Addressing = subnet.Addressing
+	logs.Network.Info("sandbox network", "subnet", subnet.Addressing.Subnet, "guest", subnet.Addressing.Guest, "configured", cfg.SandboxSubnet)
+	if w := subnet.Warning(); w != "" {
+		logs.Network.Warn(w)
+	}
 	var sandboxRef *Sandbox
 	netOpts.OnNewFlow = func(c netip.AddrPort) {
 		if sb := sandboxRef; sb != nil {
@@ -213,6 +239,60 @@ func loadPEMCerts(path string) ([]*x509.Certificate, error) {
 		return nil, fmt.Errorf("no certificates found in %s", path)
 	}
 	return out, nil
+}
+
+// TrustedCADirName is the folder (under the data directory) whose
+// certificates are trusted for upstream servers in addition to Windows'.
+const TrustedCADirName = "trusted-ca" // shown to users as network.TrustedCAFolder
+
+// loadCertsDir reads every PEM or DER certificate (.pem, .crt, .cer, .der)
+// in dir. Unreadable files are reported, not fatal.
+func loadCertsDir(dir string) ([]*x509.Certificate, []string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil
+	}
+	var certs []*x509.Certificate
+	var warns []string
+	for _, e := range entries {
+		switch strings.ToLower(filepath.Ext(e.Name())) {
+		case ".pem", ".crt", ".cer", ".der":
+		default:
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			warns = append(warns, fmt.Sprintf("%s: %v", e.Name(), err))
+			continue
+		}
+		found := parseCerts(b)
+		if len(found) == 0 {
+			warns = append(warns, e.Name()+": no certificate found (expected PEM or DER)")
+		}
+		certs = append(certs, found...)
+	}
+	return certs, warns
+}
+
+func parseCerts(b []byte) []*x509.Certificate {
+	var out []*x509.Certificate
+	rest := b
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			break
+		}
+		if c, err := x509.ParseCertificate(blk.Bytes); err == nil {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		if c, err := x509.ParseCertificate(b); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // loadOrCreateADBKey keeps the host's ADB key protected at rest (DPAPI on Windows).

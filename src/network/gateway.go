@@ -249,6 +249,7 @@ func (g *Gateway) connFailed(connID string, src, dst netip.AddrPort, started tim
 		Scheme: schemeForPort(dst.Port()), Error: friendlyNetError(err),
 		Conn: &model.Conn{ID: connID, ClientAddr: src.String(), ServerAddr: dst.String()},
 	}
+	setEgress(e.Conn, routeEgress(dst))
 	g.emit(e)
 }
 
@@ -296,7 +297,9 @@ func (f *flow) close() {
 }
 
 func (f *flow) conn(remote string) *model.Conn {
-	return &model.Conn{ID: f.id, ClientAddr: f.src.String(), ServerAddr: f.dst.String(), RemoteAddr: remote}
+	c := &model.Conn{ID: f.id, ClientAddr: f.src.String(), ServerAddr: f.dst.String(), RemoteAddr: remote}
+	setEgress(c, f.upstream.LocalAddr())
+	return c
 }
 
 // peekConn lets the gateway look at the first bytes of a stream without consuming them.
@@ -430,13 +433,20 @@ func (f *flow) interceptTLS(pc *peekConn, hello *ClientHello, sni string, ca *CA
 	// 1. Upstream handshake first, so the client is offered exactly the
 	//    protocol the server selected (h2 vs http/1.1).
 	upStart := time.Now()
-	upTLS := tls.Client(f.upstream, f.g.up.TLSClientConfig(hello.ServerName, filterALPN(hello.ALPN)))
+	upCfg := f.g.up.TLSClientConfig(hello.ServerName, filterALPN(hello.ALPN))
+	if upCfg.ServerName == "" {
+		// No SNI (the app connected to an IP address): verify the server's
+		// certificate against that address. Go never sends an IP as SNI, so
+		// the server sees the same ClientHello fields the app sent.
+		upCfg.ServerName = f.dst.Addr().String()
+	}
+	upTLS := tls.Client(f.upstream, upCfg)
 	hctx, cancel := context.WithTimeout(f.g.ctx, 15*time.Second)
 	err := upTLS.HandshakeContext(hctx)
 	cancel()
 	tlsTime := time.Since(upStart)
 	if err != nil {
-		f.tlsEvent(sni, hello, nil, false, "", "Upstream TLS handshake with "+sni+" failed: "+err.Error())
+		f.upstreamTLSFailed(pc, hello, sni, err)
 		return
 	}
 	upState := upTLS.ConnectionState()
@@ -477,6 +487,61 @@ func (f *flow) interceptTLS(pc *peekConn, hello *ClientHello, sni string, ca *CA
 	timing := &dialTiming{connect: f.connectTime, tls: tlsTime, dns: f.dnsTime()}
 	f.handleHTTP(clientTLS, upTLS, "https", &httpsCtx{info: info, alpn: proto, timing: timing})
 }
+
+// upstreamTLSFailed handles a failed upstream handshake during interception.
+// The sandbox must never be stricter than the app: servers whose certificate
+// Windows does not trust (an organization's internal CA, self-signed, IP
+// without a matching SAN), servers requiring a client certificate, or TLS
+// settings Go does not support are all fine for an app that trusts them
+// itself. The app's original ClientHello is still buffered, so the
+// connection is re-opened and passed through untouched.
+func (f *flow) upstreamTLSFailed(pc *peekConn, hello *ClientHello, sni string, hsErr error) {
+	if f.g.ctx.Err() != nil {
+		return // shutting down
+	}
+	reason, remember := upstreamTLSReason(sni, hsErr)
+	f.upstream.Close()
+	ctx, cancel := context.WithTimeout(f.g.ctx, 15*time.Second)
+	up, err := f.g.up.Dial(ctx, f.dst)
+	cancel()
+	if err != nil {
+		f.tlsEvent(sni, hello, nil, false, "", "Upstream TLS handshake with "+sni+" failed: "+hsErr.Error()+"; reconnecting for passthrough failed: "+friendlyNetError(err))
+		return
+	}
+	f.upstream = up
+	if remember {
+		// Deterministic per server: skip the interception attempt next time.
+		f.g.passthrough.Store(strings.ToLower(sni), reason)
+	}
+	f.passthroughTLS(pc, hello, sni, reason)
+}
+
+// upstreamTLSReason explains why interception was abandoned, and whether the
+// cause is a property of the server (worth remembering) rather than a
+// transient network failure.
+func upstreamTLSReason(sni string, err error) (string, bool) {
+	var (
+		unknownCA *x509.UnknownAuthorityError
+		invalid   x509.CertificateInvalidError
+		hostname  x509.HostnameError
+		verify    *tls.CertificateVerificationError
+		alert     tls.AlertError
+	)
+	const tail = " The connection is passed through uninspected so the app can apply its own trust rules."
+	switch {
+	case errors.As(err, &unknownCA) || errors.As(err, &invalid) || errors.As(err, &hostname) || errors.As(err, &verify):
+		return "The certificate of " + sni + " is not trusted by Windows (" + err.Error() + ")." + tail +
+			" To inspect it, copy the organization's CA certificate into the " + TrustedCAFolder + " folder and restart droidpector.", true
+	case errors.As(err, &alert) && (alert == 116 || alert == 42): // certificate_required, bad_certificate
+		return "The server " + sni + " requires a client certificate (mutual TLS), which only the app has." + tail, true
+	case errors.As(err, &alert):
+		return "The sandbox could not negotiate TLS with " + sni + " (" + err.Error() + ")." + tail, true
+	}
+	return "The sandbox could not complete TLS with " + sni + " (" + err.Error() + ")." + tail, false
+}
+
+// TrustedCAFolder is shown to users; see core.TrustedCADirName.
+const TrustedCAFolder = `data\trusted-ca`
 
 // clientRejectedCert reports whether a server-side handshake failure means
 // the client does not trust our certificate.
@@ -698,12 +763,15 @@ func (g *Gateway) relayUDP(guest net.Conn, src, dst netip.AddrPort) {
 		upBytes.Add(int64(n))
 		up.Write(buf[:n])
 	}
+	local := up.LocalAddr()
 	up.Close()
 	<-done
-	g.emit(&model.Event{
+	ev := &model.Event{
 		ID: model.NewID(), Kind: model.KindUDP, Category: model.CatOther, State: model.StateComplete, Initiator: model.InitiatorGuest,
 		StartedAt: started, DurationMs: ms(time.Since(started)), Protocol: "UDP", Host: g.hostFor(dst.Addr()), Port: int(dst.Port()),
 		RequestSize: upBytes.Load(), ResponseSize: downBytes.Load(),
 		Conn: &model.Conn{ClientAddr: src.String(), ServerAddr: dst.String(), BytesUp: upBytes.Load(), BytesDown: downBytes.Load()},
-	})
+	}
+	setEgress(ev.Conn, local)
+	g.emit(ev)
 }
