@@ -35,7 +35,7 @@ export function App() {
     <div className="app">
       <header className="app-header">
         <h1 className="app-title">
-          <img className="app-logo" src="./logo.png" alt="" width={26} height={26} />
+          <img className="app-logo" src="./logo.png" alt="" width={34} height={34} />
           <span className="app-name">droidpector</span>
         </h1>
         <SessionSelector />
