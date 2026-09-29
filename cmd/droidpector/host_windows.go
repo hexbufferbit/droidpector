@@ -6,6 +6,9 @@ import (
 	"html"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
+	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
 	"golang.org/x/sys/windows"
@@ -30,10 +33,94 @@ func singleInstance() (release func(), ok bool) {
 	return func() { windows.CloseHandle(h) }, true
 }
 
+var (
+	user32               = windows.NewLazySystemDLL("user32.dll")
+	procSetWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
+	procCallWindowProc   = user32.NewProc("CallWindowProcW")
+	procFindWindow       = user32.NewProc("FindWindowW")
+	procShowWindow       = user32.NewProc("ShowWindow")
+	procSetForeground    = user32.NewProc("SetForegroundWindow")
+	procIsIconic         = user32.NewProc("IsIconic")
+)
+
+const (
+	gwlpWndProc = ^uintptr(3) // GWLP_WNDPROC (-4)
+	wmClose     = 0x0010
+	swRestore   = 9
+)
+
+// shutdownGrace bounds how long closing waits for the core to save the
+// quick-start state and stop Android before it is killed.
+const shutdownGrace = 3 * time.Minute
+
+// activateExisting brings the window of a running instance to the front
+// (it may be showing its "closing" page). Reports whether one was found.
+func activateExisting() bool {
+	class, _ := windows.UTF16PtrFromString("webview")
+	title, _ := windows.UTF16PtrFromString("droidpector")
+	hwnd, _, _ := procFindWindow.Call(uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)))
+	if hwnd == 0 {
+		return false
+	}
+	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
+		procShowWindow.Call(hwnd, swRestore)
+	}
+	procSetForeground.Call(hwnd)
+	return true
+}
+
+// acquireInstance takes the single-instance lock. A previous instance that
+// is still closing (its window gone, the core finishing) is waited for
+// briefly instead of being reported as running.
+func acquireInstance() (func(), bool) {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if release, ok := singleInstance(); ok {
+			return release, true
+		}
+		if activateExisting() {
+			return nil, false // the running window is in front now: nothing to report
+		}
+		if time.Now().After(deadline) {
+			messageBox("droidpector", "droidpector is still closing (saving the Android sandbox). Wait a moment and start it again.")
+			return nil, false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// interceptClose keeps the window open while the core shuts down, showing
+// progress, instead of vanishing and leaving an invisible process behind.
+// Closing a second time quits immediately (the quick-start state is then
+// not saved).
+func interceptClose(w webview2.WebView, sup *supervisor) {
+	hwnd := uintptr(w.Window())
+	var orig uintptr
+	var closing, done atomic.Bool
+	proc := windows.NewCallback(func(h, msg, wp, lp uintptr) uintptr {
+		if msg == wmClose && !done.Load() {
+			if closing.Swap(true) {
+				sup.kill() // second close: quit now
+				done.Store(true)
+			} else {
+				w.SetHtml(loadingPage("Closing droidpector...\n\nSaving the Android sandbox so the next start takes seconds. Close the window again to quit immediately."))
+				go func() {
+					sup.stopWithin(shutdownGrace)
+					done.Store(true)
+					w.Dispatch(func() { w.Destroy() })
+				}()
+				return 0
+			}
+		}
+		r, _, _ := procCallWindowProc.Call(orig, h, msg, wp, lp)
+		return r
+	})
+	orig, _, _ = procSetWindowLongPtr.Call(hwnd, gwlpWndProc, proc)
+}
+
 func runHost() int {
-	release, ok := singleInstance()
+	release, ok := acquireInstance()
 	if !ok {
-		messageBox("droidpector", "droidpector is already running.")
 		return 1
 	}
 	defer release()
@@ -76,15 +163,16 @@ func runHost() int {
 		}
 		sup.onURL(sup.url())
 	}()
+	interceptClose(w, sup)
 	w.Run()
-	sup.stop()
+	sup.stop() // no-op after a normal close; covers other exits
 	return 0
 }
 
 func loadingPage(msg string) string {
 	return `<!doctype html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;` +
 		`font-family:Segoe UI,sans-serif;background:#1e1f22;color:#dcdfe4"><div style="text-align:center;max-width:560px">` +
-		`<img src="data:image/png;base64,` + logoPNG + `" width="120" height="120" alt="" style="margin-bottom:16px"><div style="font-size:20px;margin-bottom:12px">droidpector</div><div>` + html.EscapeString(msg) + `</div></div></body></html>`
+		`<img src="data:image/png;base64,` + logoPNG + `" width="120" height="120" alt="" style="margin-bottom:16px"><div style="font-size:20px;margin-bottom:12px">droidpector</div><div style="white-space:pre-line;line-height:1.5">` + html.EscapeString(msg) + `</div></div></body></html>`
 }
 
 func openURL(url string) {

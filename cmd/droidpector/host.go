@@ -152,12 +152,26 @@ func (s *supervisor) url() string {
 	return s.cur.ready.URL
 }
 
-func (s *supervisor) stop() {
+func (s *supervisor) stop() { s.stopWithin(45 * time.Second) }
+
+// stopWithin asks the core to exit and kills it after grace.
+func (s *supervisor) stopWithin(grace time.Duration) {
 	s.mu.Lock()
 	s.closing = true
 	cp := s.cur
 	s.mu.Unlock()
 	if cp != nil {
-		cp.shutdown(45 * time.Second)
+		cp.shutdown(grace)
+	}
+}
+
+// kill ends the core immediately (its Job Object takes QEMU with it).
+func (s *supervisor) kill() {
+	s.mu.Lock()
+	s.closing = true
+	cp := s.cur
+	s.mu.Unlock()
+	if cp != nil {
+		cp.kill()
 	}
 }
